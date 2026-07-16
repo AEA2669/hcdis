@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control Page</title>
+    <!-- Load PeerJS library -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 50px;
+            background-color: #f4f4f9;
+        }
+        .panel {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        input {
+            font-size: 1.5rem;
+            padding: 10px;
+            width: 150px;
+            text-align: center;
+            letter-spacing: 3px;
+            margin-bottom: 15px;
+            border: 2px solid #ccc;
+            border-radius: 6px;
+        }
+        button {
+            font-size: 1.2rem;
+            padding: 15px 30px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            margin: 5px;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        #btn-connect {
+            background-color: #007BFF;
+            color: white;
+            width: 100%;
+        }
+        #btn-red { background-color: red; color: white; width: 120px; }
+        #btn-yellow { background-color: yellow; color: black; width: 120px; }
+        #status {
+            margin-top: 15px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="panel" id="connect-panel">
+        <h2>Enter PIN from Show Page</h2>
+        <input type="text" id="pin-input" maxlength="4" placeholder="0000">
+        <br>
+        <button id="btn-connect" disabled>Connecting to server...</button>
+        <div id="status">Initializing...</div>
+    </div>
+    
+    <div class="panel" id="control-panel" style="display: none;">
+        <h2>Change Color</h2>
+        <button id="btn-red">RED</button>
+        <button id="btn-yellow">YELLOW</button>
+    </div>
+
+    <script>
+        const pinInput = document.getElementById('pin-input');
+        const btnConnect = document.getElementById('btn-connect');
+        const btnRed = document.getElementById('btn-red');
+        const btnYellow = document.getElementById('btn-yellow');
+        const statusDiv = document.getElementById('status');
+        const connectPanel = document.getElementById('connect-panel');
+        const controlPanel = document.getElementById('control-panel');
+
+        let conn = null;
+
+        // Initialize PeerJS
+        const peer = new Peer();
+
+        peer.on('open', () => {
+            statusDiv.innerText = "Ready to connect.";
+            btnConnect.innerText = "Connect to Show Page";
+            btnConnect.disabled = false;
+        });
+
+        btnConnect.onclick = () => {
+            const pin = pinInput.value.trim();
+            if (pin.length !== 4) {
+                alert("Please enter a 4-digit PIN.");
+                return;
+            }
+
+            statusDiv.innerText = "Connecting to Show Page...";
+            btnConnect.disabled = true;
+
+            // Connect using the same prefix logic as the show page
+            conn = peer.connect('alex-color-show-' + pin);
+
+            conn.on('open', () => {
+                connectPanel.style.display = 'none';
+                controlPanel.style.display = 'block';
+            });
+
+            conn.on('close', () => {
+                alert("Connection lost.");
+                connectPanel.style.display = 'block';
+                controlPanel.style.display = 'none';
+                btnConnect.disabled = false;
+                statusDiv.innerText = "Disconnected.";
+            });
+        };
+
+        // Send color commands
+        btnRed.onclick = () => {
+            if (conn && conn.open) conn.send('red');
+        };
+        
+        btnYellow.onclick = () => {
+            if (conn && conn.open) conn.send('yellow');
+        };
+
+        peer.on('error', (err) => {
+            statusDiv.innerText = "Error: " + err.type;
+            btnConnect.disabled = false;
+        });
+    </script>
+</body>
+</html>

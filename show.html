@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Show Page</title>
+    <!-- Load PeerJS library -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: sans-serif;
+            background-color: yellow;
+            transition: background-color 0.1s ease;
+        }
+        #status-card {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 1.5rem; }
+        #pin-display {
+            font-size: 4rem;
+            font-weight: bold;
+            letter-spacing: 5px;
+            color: #333;
+            margin: 10px 0;
+        }
+        #status-text { color: #666; font-size: 1.2rem; }
+    </style>
+</head>
+<body>
+    <div id="status-card">
+        <h1>Your Connection PIN:</h1>
+        <div id="pin-display">...</div>
+        <div id="status-text">Connecting to signaling server...</div>
+    </div>
+
+    <script>
+        // Generate a random 4-digit PIN
+        const pin = Math.floor(1000 + Math.random() * 9000).toString();
+        const pinDisplay = document.getElementById('pin-display');
+        const statusText = document.getElementById('status-text');
+        
+        // Initialize PeerJS with a unique ID based on the PIN
+        // We use a prefix to avoid collisions with other PeerJS users globally
+        const peer = new Peer('alex-color-show-' + pin);
+
+        peer.on('open', (id) => {
+            pinDisplay.innerText = pin;
+            statusText.innerText = "Waiting for control page to connect...";
+        });
+
+        // Listen for incoming WebRTC connections
+        peer.on('connection', (conn) => {
+            conn.on('open', () => {
+                statusText.innerText = "Control page connected!";
+                statusText.style.color = "green";
+            });
+
+            // Listen for data (color commands)
+            conn.on('data', (data) => {
+                if (data === 'red' || data === 'yellow') {
+                    document.body.style.backgroundColor = data;
+                }
+            });
+
+            conn.on('close', () => {
+                statusText.innerText = "Control page disconnected. Waiting...";
+                statusText.style.color = "#666";
+            });
+        });
+
+        peer.on('error', (err) => {
+            statusText.innerText = "Error: " + err.type;
+            statusText.style.color = "red";
+        });
+    </script>
+</body>
+</html>
