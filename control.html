@@ -3,141 +3,1498 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Control Page</title>
-    <!-- Load PeerJS library -->
+    <title>DFW Ramp Control</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
+        :root {
+            --bg-0: #0d1218;
+            --bg-1: #131b23;
+            --panel: #1c2732;
+            --panel-soft: #223140;
+            --line: #334759;
+            --text-1: #ecf2f7;
+            --text-2: #b8c7d6;
+            --accent: #2f9bff;
+            --accent-2: #0b6cc5;
+            --ok: #16a34a;
+            --warn: #d97706;
+            --yellow: #b88900;
+            --red: #c92a2a;
+            --info: #005bb5;
+            --danger: #8f1d1d;
+            --radius: 14px;
+            --shadow: 0 14px 35px rgba(0, 0, 0, 0.45);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: sans-serif;
+            margin: 0;
+            min-height: 100dvh;
+            font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+            color: var(--text-1);
+            background:
+                radial-gradient(circle at 20% 15%, rgba(47, 155, 255, 0.16), transparent 35%),
+                radial-gradient(circle at 88% 80%, rgba(217, 119, 6, 0.12), transparent 30%),
+                linear-gradient(145deg, var(--bg-0), var(--bg-1));
+            display: grid;
+            place-items: center;
+            padding: 22px;
+        }
+
+        .app-shell {
+            width: min(920px, 100%);
+            display: grid;
+            gap: 16px;
+        }
+
+        .title-strip {
+            border: 1px solid var(--line);
+            background: linear-gradient(160deg, rgba(34, 49, 64, 0.95), rgba(20, 30, 39, 0.95));
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 16px 18px;
             display: flex;
-            flex-direction: column;
             align-items: center;
-            margin-top: 50px;
-            background-color: #f4f4f9;
+            justify-content: space-between;
+            gap: 14px;
         }
+
+        .title-strip h1 {
+            margin: 0;
+            font-size: clamp(1.1rem, 2.4vw, 1.5rem);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        .connection-pill {
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            background: rgba(12, 20, 26, 0.65);
+            color: var(--text-2);
+        }
+
+        .connection-pill.is-connected {
+            border-color: rgba(22, 163, 74, 0.55);
+            color: #95f5b2;
+            background: rgba(22, 163, 74, 0.14);
+        }
+
+        .build-badge {
+            border: 1px solid rgba(126, 162, 195, 0.45);
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 0.76rem;
+            font-weight: 800;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: #dbe8f5;
+            background: rgba(8, 14, 20, 0.62);
+        }
+
+        .diag-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .diag-tile {
+            border: 1px solid rgba(126, 162, 195, 0.35);
+            border-radius: 10px;
+            background: rgba(10, 16, 22, 0.56);
+            padding: 8px 10px;
+        }
+
+        .diag-label {
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-2);
+            margin-bottom: 4px;
+            font-weight: 700;
+        }
+
+        .diag-value {
+            font-size: 0.84rem;
+            color: #d8e6f3;
+            font-weight: 800;
+            word-break: break-word;
+        }
+
         .panel {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-            text-align: center;
-            margin-bottom: 20px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: linear-gradient(160deg, rgba(28, 39, 50, 0.95), rgba(18, 28, 37, 0.95));
+            box-shadow: var(--shadow);
+            padding: clamp(16px, 2.6vw, 24px);
         }
-        input {
-            font-size: 1.5rem;
-            padding: 10px;
-            width: 150px;
-            text-align: center;
-            letter-spacing: 3px;
-            margin-bottom: 15px;
-            border: 2px solid #ccc;
-            border-radius: 6px;
+
+        .panel h2 {
+            margin: 0 0 12px;
+            font-size: clamp(1rem, 2.2vw, 1.25rem);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #dce7f3;
         }
-        button {
-            font-size: 1.2rem;
-            padding: 15px 30px;
-            cursor: pointer;
+
+        .panel p {
+            margin: 0;
+            color: var(--text-2);
+            font-size: 0.94rem;
+        }
+
+        .grid {
+            display: grid;
+            gap: 16px;
+        }
+
+        .two-col {
+            grid-template-columns: 1fr;
+        }
+
+        label {
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: #d2e0ee;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        textarea {
+            width: 100%;
+            border: 1px solid #4a6073;
+            background: #0f171f;
+            color: var(--text-1);
+            border-radius: 10px;
+            padding: 12px;
+            font-size: 1rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            font-family: inherit;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(47, 155, 255, 0.22);
+        }
+
+        #pin-input {
+            text-align: center;
+            letter-spacing: 0.4em;
+            font-size: clamp(1.4rem, 3vw, 1.8rem);
+            font-weight: 800;
+        }
+
+        textarea {
+            min-height: 110px;
+            resize: vertical;
+        }
+
+        .btn {
+            width: 100%;
             border: none;
-            border-radius: 8px;
-            font-weight: bold;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-            margin: 5px;
+            border-radius: 10px;
+            color: #fff;
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            padding: 13px 14px;
+            cursor: pointer;
+            transition: transform 0.1s ease, filter 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 5px 18px rgba(0, 0, 0, 0.3);
         }
-        button:disabled {
-            opacity: 0.5;
+
+        .btn:hover {
+            filter: brightness(1.05);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn:focus-visible {
+            outline: 3px solid rgba(47, 155, 255, 0.55);
+            outline-offset: 2px;
+        }
+
+        .btn:disabled {
             cursor: not-allowed;
+            filter: saturate(0.3) brightness(0.8);
             box-shadow: none;
         }
-        #btn-connect {
-            background-color: #007BFF;
-            color: white;
-            width: 100%;
+
+        #btn-connect { background: linear-gradient(160deg, var(--accent), var(--accent-2)); }
+        #btn-wind { background: linear-gradient(160deg, #de8506, var(--warn)); }
+        #btn-yellow { background: linear-gradient(160deg, #c19714, var(--yellow)); }
+        #btn-red { background: linear-gradient(160deg, #de4343, var(--red)); }
+        #btn-info { background: linear-gradient(160deg, #1a74c8, var(--info)); }
+        #btn-disconnect { background: linear-gradient(160deg, #6b7f90, #536473); }
+        #btn-clear-memo { background: linear-gradient(160deg, #4f5f6d, #3b4b59); }
+
+        .stack {
+            display: grid;
+            gap: 10px;
         }
-        #btn-red { background-color: red; color: white; width: 120px; }
-        #btn-yellow { background-color: yellow; color: black; width: 120px; }
-        #status {
-            margin-top: 15px;
-            font-size: 1.1rem;
-            font-weight: bold;
-            color: #555;
+
+        .wind-row {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .helper-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .status {
+            margin-top: 10px;
+            border: 1px solid rgba(47, 155, 255, 0.4);
+            border-radius: 10px;
+            background: rgba(47, 155, 255, 0.14);
+            color: #c6e6ff;
+            padding: 10px 12px;
+            font-size: 0.94rem;
+            font-weight: 700;
+        }
+
+        .status.error {
+            border-color: rgba(201, 42, 42, 0.55);
+            background: rgba(201, 42, 42, 0.2);
+            color: #ffd8d8;
+        }
+
+        .status.success {
+            border-color: rgba(22, 163, 74, 0.52);
+            background: rgba(22, 163, 74, 0.18);
+            color: #b9f7cb;
+        }
+
+        .hint {
+            min-height: 1.1em;
+            font-size: 0.82rem;
+            color: #fbbf24;
+            margin-top: 8px;
+            font-weight: 700;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 18px;
+            transform: translateX(-50%);
+            width: min(90vw, 520px);
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(22, 163, 74, 0.55);
+            background: rgba(13, 31, 20, 0.94);
+            color: #b8f5ca;
+            font-weight: 700;
+            text-align: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            transform-origin: center;
+            z-index: 50;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(-4px);
+        }
+
+        @media (min-width: 740px) {
+            .two-col {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .wind-row {
+                grid-template-columns: 0.9fr 1.1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="panel" id="connect-panel">
-        <h2>Enter PIN from Show Page</h2>
-        <input type="text" id="pin-input" maxlength="4" placeholder="0000">
-        <br>
-        <button id="btn-connect" disabled>Connecting to server...</button>
-        <div id="status">Initializing...</div>
-    </div>
-    
-    <div class="panel" id="control-panel" style="display: none;">
-        <h2>Change Color</h2>
-        <button id="btn-red">RED</button>
-        <button id="btn-yellow">YELLOW</button>
-    </div>
+    <main class="app-shell">
+        <section class="title-strip" aria-label="Control header">
+            <h1>DFW Ramp Operations Console</h1>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+                <div id="build-stamp" class="build-badge">Build --</div>
+                <div id="connection-pill" class="connection-pill" aria-live="polite">Offline</div>
+            </div>
+        </section>
+
+        <section class="panel" aria-label="Connection diagnostics" style="padding: 12px 14px;">
+            <h2 style="font-size: 0.88rem; margin: 0;">Diagnostics</h2>
+            <div class="diag-grid">
+                <div class="diag-tile"><div class="diag-label">Last Error</div><div id="diag-last-error" class="diag-value">None</div></div>
+                <div class="diag-tile"><div class="diag-label">Attempt Count</div><div id="diag-attempt" class="diag-value">0</div></div>
+                <div class="diag-tile"><div class="diag-label">Active Peer ID</div><div id="diag-peer-id" class="diag-value">None</div></div>
+                <div class="diag-tile"><div class="diag-label">Heartbeat</div><div id="diag-heartbeat" class="diag-value">Idle</div></div>
+            </div>
+        </section>
+
+        <section class="panel" id="connect-panel" aria-labelledby="connect-heading">
+            <h2 id="connect-heading">Link To Show Page</h2>
+            <p>Enter the four-digit pin displayed on the show screen.</p>
+            <div class="grid" style="margin-top: 14px;">
+                <div>
+                    <label for="pin-input">Connection Pin</label>
+                    <input type="text" id="pin-input" maxlength="4" inputmode="numeric" placeholder="0000" aria-describedby="pin-hint">
+                    <div id="pin-hint" class="hint" aria-live="polite"></div>
+                </div>
+                <button id="btn-connect" class="btn" disabled>Connecting to signaling server...</button>
+            </div>
+            <div id="status" class="status" role="status" aria-live="polite">Initializing connection service...</div>
+        </section>
+
+        <section class="panel hidden" id="control-panel" aria-labelledby="alerts-heading">
+            <div class="helper-row" style="margin-bottom: 12px;">
+                <h2 id="alerts-heading" style="margin: 0;">Weather Alerts</h2>
+                <button id="btn-disconnect" class="btn" style="width: auto; min-width: 145px;">Disconnect</button>
+            </div>
+
+            <div class="grid two-col">
+                <article class="panel" style="padding: 14px; background: rgba(23, 35, 45, 0.8);">
+                    <h2 style="font-size: 0.95rem; margin-bottom: 10px;">Wind Alert</h2>
+                    <div class="wind-row">
+                        <div>
+                            <label for="wind-speed">Wind Speed (KTS)</label>
+                            <input type="number" id="wind-speed" placeholder="0-150" min="0" max="150" step="1" aria-describedby="wind-hint">
+                            <div id="wind-hint" class="hint" aria-live="polite"></div>
+                        </div>
+                        <div style="display: grid; align-content: end;">
+                            <button id="btn-wind" class="btn" aria-label="Send high wind alert">High Wind</button>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="panel" style="padding: 14px; background: rgba(23, 35, 45, 0.8);">
+                    <h2 style="font-size: 0.95rem; margin-bottom: 10px;">Lightning Alerts</h2>
+                    <div class="stack">
+                        <button id="btn-yellow" class="btn" aria-label="Send yellow lightning alert within ten miles">Yellow Alert (10 mi)</button>
+                        <button id="btn-red" class="btn" aria-label="Send red lightning alert within three miles">Red Alert (3 mi)</button>
+                    </div>
+                </article>
+            </div>
+
+            <article class="panel" style="padding: 14px; margin-top: 14px; background: rgba(23, 35, 45, 0.8);">
+                <h2 style="font-size: 0.95rem; margin-bottom: 10px;">Info Memo</h2>
+                <label for="memo-text">Message</label>
+                <textarea id="memo-text" placeholder="Type memo or instructions for the show screen..."></textarea>
+                <div class="helper-row" style="margin-top: 10px;">
+                    <button id="btn-info" class="btn" style="flex: 1; min-width: 180px;" aria-label="Send information memo">Send Info</button>
+                    <button id="btn-clear-memo" class="btn" style="width: auto; min-width: 130px;" aria-label="Clear memo input">Clear Memo</button>
+                </div>
+            </article>
+
+            <article class="panel" style="padding: 14px; margin-top: 14px; background: rgba(23, 35, 45, 0.8);">
+                <h2 style="font-size: 0.95rem; margin-bottom: 10px;">Rich Content Package</h2>
+                <div class="grid two-col">
+                    <div>
+                        <label for="content-kind">Content Type</label>
+                        <select id="content-kind" style="width:100%; border:1px solid #4a6073; background:#0f171f; color:var(--text-1); border-radius:10px; padding:12px; font-size:1rem; font-family:inherit;">
+                            <option value="text">Text Block</option>
+                            <option value="image">Image URL</option>
+                            <option value="video">Video URL</option>
+                            <option value="embed">Web Embed (iframe)</option>
+                            <option value="html">Raw HTML</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="content-title">Title (optional)</label>
+                        <input type="text" id="content-title" placeholder="Headline for content card">
+                    </div>
+                </div>
+
+                <div id="content-url-wrap" style="margin-top: 10px;">
+                    <label for="content-url">URL</label>
+                    <input type="text" id="content-url" placeholder="https://example.com/media.jpg">
+                </div>
+
+                <div id="content-body-wrap" style="margin-top: 10px;" class="hidden">
+                    <label for="content-body">Body</label>
+                    <textarea id="content-body" placeholder="Type text or paste HTML here..."></textarea>
+                </div>
+
+                <div style="margin-top: 10px;">
+                    <label for="content-file">Local File (optional)</label>
+                    <input type="file" id="content-file" style="width:100%; border:1px solid #4a6073; background:#0f171f; color:var(--text-1); border-radius:10px; padding:10px; font-size:0.95rem; font-family:inherit;">
+                </div>
+
+                <div id="drop-zone" style="margin-top:10px; border:1px dashed #5e7790; border-radius:10px; padding:12px; text-align:center; color:var(--text-2); font-weight:700;">
+                    Drag and drop images/videos here to add to carousel playlist
+                </div>
+
+                <div class="grid two-col" style="margin-top:10px; align-items:end;">
+                    <div>
+                        <label for="carousel-interval">Carousel Interval (seconds)</label>
+                        <input type="number" id="carousel-interval" min="2" max="120" step="1" value="8">
+                    </div>
+                    <div class="helper-row" style="justify-content:flex-end;">
+                        <button id="btn-add-carousel" class="btn" style="width:auto; min-width:160px; background: linear-gradient(160deg, #1a74c8, #0f5aa0);">Add To Playlist</button>
+                    </div>
+                </div>
+
+                <div id="carousel-list" style="margin-top:10px; border:1px solid #3e5467; border-radius:10px; background:#0f171f; padding:10px; min-height:52px; max-height:180px; overflow:auto; color:var(--text-2); font-size:0.9rem;">
+                    Playlist empty.
+                </div>
+
+                <div class="helper-row" style="margin-top: 10px;">
+                    <button id="btn-start-carousel" class="btn" style="flex:1; min-width:170px; background: linear-gradient(160deg, #16a34a, #11773a);">Start Carousel</button>
+                    <button id="btn-stop-carousel" class="btn" style="width:auto; min-width:150px; background: linear-gradient(160deg, #8f1d1d, #6b1515);">Stop Carousel</button>
+                    <button id="btn-clear-carousel" class="btn" style="width:auto; min-width:160px; background: linear-gradient(160deg, #6b7f90, #536473);">Clear Playlist</button>
+                </div>
+
+                <div class="helper-row" style="margin-top: 10px;">
+                    <button id="btn-send-content" class="btn" style="flex: 1; min-width: 180px; background: linear-gradient(160deg, #1473c7, #0f5aa0);">Send Content</button>
+                    <button id="btn-clear-content" class="btn" style="width: auto; min-width: 130px; background: linear-gradient(160deg, #6b7f90, #536473);">Clear Content</button>
+                </div>
+                <div id="content-hint" class="hint" aria-live="polite"></div>
+            </article>
+
+            <div id="command-status" class="status" role="status" aria-live="polite" style="margin-top: 14px;">Connected. Ready to send alerts.</div>
+        </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <script>
+        // ============================================
+        // ALERT STATE MODEL
+        // ============================================
+        const alertState = {
+            high_winds: { active: false, knots: 0 },
+            lightning: { active: false, level: null }, // null, 'yellow', or 'red'
+            memos: [], // [{id, text, timestamp}]
+            content: {
+                active: false,
+                kind: null,
+                payload: null,
+                title: '',
+                carouselActive: false,
+                intervalSec: 8,
+                items: []
+            }
+        };
+
+        // ============================================
+        // DOM ELEMENTS
+        // ============================================
         const pinInput = document.getElementById('pin-input');
+        const pinHint = document.getElementById('pin-hint');
         const btnConnect = document.getElementById('btn-connect');
-        const btnRed = document.getElementById('btn-red');
+
+        const windSpeedInput = document.getElementById('wind-speed');
+        const windHint = document.getElementById('wind-hint');
+        const btnWind = document.getElementById('btn-wind');
         const btnYellow = document.getElementById('btn-yellow');
+        const btnRed = document.getElementById('btn-red');
+
+        const memoTextInput = document.getElementById('memo-text');
+        const btnInfo = document.getElementById('btn-info');
+        const btnClearMemo = document.getElementById('btn-clear-memo');
+        const btnDisconnect = document.getElementById('btn-disconnect');
+
+        const contentKind = document.getElementById('content-kind');
+        const contentTitle = document.getElementById('content-title');
+        const contentUrl = document.getElementById('content-url');
+        const contentBody = document.getElementById('content-body');
+        const contentFile = document.getElementById('content-file');
+        const contentUrlWrap = document.getElementById('content-url-wrap');
+        const contentBodyWrap = document.getElementById('content-body-wrap');
+        const contentHint = document.getElementById('content-hint');
+        const btnSendContent = document.getElementById('btn-send-content');
+        const btnClearContent = document.getElementById('btn-clear-content');
+        const dropZone = document.getElementById('drop-zone');
+        const carouselIntervalInput = document.getElementById('carousel-interval');
+        const carouselList = document.getElementById('carousel-list');
+        const btnAddCarousel = document.getElementById('btn-add-carousel');
+        const btnStartCarousel = document.getElementById('btn-start-carousel');
+        const btnStopCarousel = document.getElementById('btn-stop-carousel');
+        const btnClearCarousel = document.getElementById('btn-clear-carousel');
+
         const statusDiv = document.getElementById('status');
+        const commandStatusDiv = document.getElementById('command-status');
         const connectPanel = document.getElementById('connect-panel');
         const controlPanel = document.getElementById('control-panel');
+        const connectionPill = document.getElementById('connection-pill');
+        const buildStamp = document.getElementById('build-stamp');
+        const diagLastError = document.getElementById('diag-last-error');
+        const diagAttempt = document.getElementById('diag-attempt');
+        const diagPeerId = document.getElementById('diag-peer-id');
+        const diagHeartbeat = document.getElementById('diag-heartbeat');
+        const toast = document.getElementById('toast');
 
         let conn = null;
+        let toastTimer = null;
+        let selectedFilePayload = '';
+        let selectedFileName = '';
+        let connectAttemptTimer = null;
+        let autoReconnectTimer = null;
+        let heartbeatTimer = null;
+        let heartbeatUiTimer = null;
+        let lastHeartbeatPongTs = 0;
+        let currentConnectPin = '';
+        let autoReconnectCycle = 0;
+        let manualDisconnectRequested = false;
+        let outboundSeq = 0;
+        let activeConnectRun = 0;
 
-        // Initialize PeerJS
-        const peer = new Peer();
+        const APP_VERSION = '2026.07.16-r2';
+        const MAX_CONNECT_ATTEMPTS = 8;
+
+        const PEER_CONFIG = {
+            host: '0.peerjs.com',
+            port: 443,
+            path: '/',
+            secure: true,
+            debug: 1
+        };
+
+        const peer = new Peer(undefined, PEER_CONFIG);
+
+        function setDiagnostics(update) {
+            if (update.lastError !== undefined) {
+                diagLastError.textContent = update.lastError || 'None';
+            }
+            if (update.attempt !== undefined) {
+                diagAttempt.textContent = String(update.attempt);
+            }
+            if (update.peerId !== undefined) {
+                diagPeerId.textContent = update.peerId || 'None';
+            }
+            if (update.heartbeat !== undefined) {
+                diagHeartbeat.textContent = update.heartbeat;
+            }
+        }
+
+        function stopHeartbeat() {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+            setDiagnostics({ heartbeat: 'Idle' });
+        }
+
+        function startHeartbeat() {
+            clearInterval(heartbeatTimer);
+            lastHeartbeatPongTs = 0;
+            heartbeatTimer = setInterval(() => {
+                if (!conn || !conn.open) {
+                    return;
+                }
+                try {
+                    conn.send(JSON.stringify({ type: 'heartbeat_ping', ts: Date.now(), appVersion: APP_VERSION }));
+                } catch (_) {
+                    // Ignore transient send failures during reconnect windows.
+                }
+            }, 5000);
+        }
+
+        function startHeartbeatUiTicker() {
+            clearInterval(heartbeatUiTimer);
+            heartbeatUiTimer = setInterval(() => {
+                if (!conn || !conn.open) {
+                    setDiagnostics({ heartbeat: 'Idle' });
+                    return;
+                }
+                if (!lastHeartbeatPongTs) {
+                    setDiagnostics({ heartbeat: 'Waiting...' });
+                    return;
+                }
+                const ageSec = Math.max(0, Math.floor((Date.now() - lastHeartbeatPongTs) / 1000));
+                setDiagnostics({ heartbeat: ageSec + 's ago' });
+            }, 1000);
+        }
+
+        function handleIncomingControlData(data) {
+            try {
+                const msg = typeof data === 'string' ? JSON.parse(data) : data;
+                if (msg && msg.type === 'heartbeat_pong') {
+                    lastHeartbeatPongTs = Date.now();
+                    setDiagnostics({ heartbeat: '0s ago', lastError: '' });
+                }
+            } catch (_) {
+                // Ignore non-json or legacy data payloads.
+            }
+        }
+
+        function beginAutoReconnect(reason) {
+            if (manualDisconnectRequested || !currentConnectPin) {
+                disconnectConnection(false);
+                return;
+            }
+
+            autoReconnectCycle += 1;
+            const cycle = autoReconnectCycle;
+            const delay = Math.min(1200 + cycle * 500, 5000);
+            clearTimeout(autoReconnectTimer);
+            setStatus('Connection dropped (' + reason + '). Auto reconnecting in ' + Math.round(delay / 1000) + 's...', 'error');
+            setCommandStatus('Auto-reconnect active. PIN ' + currentConnectPin + '.', 'error');
+            setDiagnostics({ lastError: reason || 'connection-dropped', heartbeat: 'Idle' });
+            updateConnectionPill(false);
+
+            autoReconnectTimer = setTimeout(() => {
+                if (manualDisconnectRequested) {
+                    return;
+                }
+                btnConnect.disabled = true;
+                tryConnectCandidates(currentConnectPin, 1, true);
+            }, delay);
+        }
+
+        // ============================================
+        // UI UTILITIES
+        // ============================================
+        function updateConnectionPill(connected) {
+            if (connected) {
+                connectionPill.textContent = 'Connected';
+                connectionPill.classList.add('is-connected');
+            } else {
+                connectionPill.textContent = 'Offline';
+                connectionPill.classList.remove('is-connected');
+            }
+        }
+
+        function setStatus(message, type) {
+            statusDiv.textContent = message;
+            statusDiv.classList.remove('error', 'success');
+            if (type === 'error') {
+                statusDiv.classList.add('error');
+            }
+            if (type === 'success') {
+                statusDiv.classList.add('success');
+            }
+        }
+
+        function setCommandStatus(message, type) {
+            commandStatusDiv.textContent = message;
+            commandStatusDiv.classList.remove('error', 'success');
+            if (type === 'error') {
+                commandStatusDiv.classList.add('error');
+            }
+            if (type === 'success') {
+                commandStatusDiv.classList.add('success');
+            }
+        }
+
+        function showToast(message) {
+            toast.textContent = message;
+            toast.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 1600);
+        }
+
+        function withSendingState(button, label, action) {
+            const oldText = button.textContent;
+            button.disabled = true;
+            button.textContent = label;
+            try {
+                action();
+            } finally {
+                setTimeout(() => {
+                    button.textContent = oldText;
+                    button.disabled = false;
+                }, 280);
+            }
+        }
+
+        // ============================================
+        // ALERT STATE MANAGEMENT
+        // ============================================
+        function sendAggregateState(message) {
+            if (!conn || !conn.open) {
+                setCommandStatus('Not connected. Reconnect to send alerts.', 'error');
+                return false;
+            }
+            const payload = {
+                version: 1,
+                alerts: alertState,
+                timestamp: Date.now(),
+                seq: ++outboundSeq,
+                sender: 'control',
+                appVersion: APP_VERSION
+            };
+            conn.send(JSON.stringify(payload));
+            setCommandStatus(message + ' at ' + new Date().toLocaleTimeString() + '.', 'success');
+            showToast(message);
+            return true;
+        }
+
+        function updateAlertState(updater, message) {
+            updater();
+            sendAggregateState(message);
+        }
+
+        function sanitizeUrl(url) {
+            const trimmed = url.trim();
+            if (!trimmed) {
+                return '';
+            }
+            if (/^https?:\/\//i.test(trimmed)) {
+                return trimmed;
+            }
+            return 'https://' + trimmed;
+        }
+
+        function ensureContentDefaults() {
+            if (!alertState.content) {
+                alertState.content = { active: false, kind: null, payload: null, title: '', carouselActive: false, intervalSec: 8, items: [] };
+            }
+            if (!Array.isArray(alertState.content.items)) {
+                alertState.content.items = [];
+            }
+            if (typeof alertState.content.intervalSec !== 'number') {
+                alertState.content.intervalSec = 8;
+            }
+            if (typeof alertState.content.carouselActive !== 'boolean') {
+                alertState.content.carouselActive = false;
+            }
+        }
+
+        function renderCarouselList() {
+            ensureContentDefaults();
+            const items = alertState.content.items;
+
+            if (!items.length) {
+                carouselList.textContent = 'Playlist empty.';
+                return;
+            }
+
+            carouselList.innerHTML = items
+                .map((item, index) => {
+                    const label = item.title || ('Item ' + (index + 1));
+                    return '<div style="padding:6px 0; border-bottom:1px solid #2c3f50;"><strong>'
+                        + (index + 1) + '.</strong> '
+                        + label
+                        + ' <span style="opacity:.8;">[' + item.kind + ']</span></div>';
+                })
+                .join('');
+        }
+
+        function inferKindFromFile(file) {
+            const fileType = String(file.type || '').toLowerCase();
+            const fileName = String(file.name || '').toLowerCase();
+
+            if (fileType.startsWith('image/')) return 'image';
+            if (fileType.startsWith('video/')) return 'video';
+            if (fileType.includes('text/html') || fileName.endsWith('.html') || fileName.endsWith('.htm')) return 'html';
+            return 'text';
+        }
+
+        function readFileAsPayload(file, kind) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+                reader.onerror = () => reject(new Error('read_failed'));
+                if (kind === 'image' || kind === 'video') {
+                    reader.readAsDataURL(file);
+                } else {
+                    reader.readAsText(file);
+                }
+            });
+        }
+
+        function normalizeInterval() {
+            const raw = Number(carouselIntervalInput.value);
+            const value = Number.isFinite(raw) ? raw : 8;
+            return Math.max(2, Math.min(120, Math.floor(value)));
+        }
+
+        function createContentItemFromInputs() {
+            const kind = contentKind.value;
+            const title = contentTitle.value.trim();
+
+            if (selectedFilePayload) {
+                return {
+                    id: 'item_' + Date.now(),
+                    kind,
+                    payload: selectedFilePayload,
+                    title: title || selectedFileName
+                };
+            }
+
+            if (kind === 'text' || kind === 'html') {
+                const payload = contentBody.value.trim();
+                if (!payload) {
+                    contentHint.textContent = 'Enter content before adding.';
+                    return null;
+                }
+                return { id: 'item_' + Date.now(), kind, payload, title };
+            }
+
+            const payload = sanitizeUrl(contentUrl.value);
+            if (!/^https?:\/\//i.test(payload)) {
+                contentHint.textContent = 'Enter a valid URL before adding.';
+                return null;
+            }
+            return { id: 'item_' + Date.now(), kind, payload, title };
+        }
+
+        function updateContentInputMode() {
+            const kind = contentKind.value;
+            contentHint.textContent = '';
+            contentFile.value = '';
+            selectedFilePayload = '';
+            selectedFileName = '';
+
+            if (kind === 'text' || kind === 'html') {
+                contentUrlWrap.classList.add('hidden');
+                contentBodyWrap.classList.remove('hidden');
+                contentBody.placeholder = kind === 'html'
+                    ? '<div><h2>Ramp Notice</h2><p>Custom HTML content...</p></div>'
+                    : 'Type the content text shown on the display...';
+            } else {
+                contentUrlWrap.classList.remove('hidden');
+                contentBodyWrap.classList.add('hidden');
+
+                if (kind === 'image') {
+                    contentUrl.placeholder = 'https://example.com/ramp-map.jpg';
+                } else if (kind === 'video') {
+                    contentUrl.placeholder = 'https://example.com/clip.mp4';
+                } else {
+                    contentUrl.placeholder = 'https://example.com/dashboard';
+                }
+            }
+
+            if (kind === 'image') {
+                contentFile.accept = 'image/*';
+            } else if (kind === 'video') {
+                contentFile.accept = 'video/*';
+            } else if (kind === 'html') {
+                contentFile.accept = '.html,.htm,text/html';
+            } else {
+                contentFile.accept = '.txt,text/plain';
+            }
+        }
+
+        // ============================================
+        // WIND ALERT HANDLING
+        // ============================================
+        btnWind.onclick = () => {
+            if (alertState.high_winds.active) {
+                // Toggle OFF
+                updateAlertState(() => {
+                    alertState.high_winds.active = false;
+                    alertState.high_winds.knots = 0;
+                }, 'Wind alert cleared');
+                btnWind.textContent = 'High Wind (Off)';
+                windSpeedInput.disabled = false;
+            } else {
+                // Toggle ON - validate speed first
+                const raw = windSpeedInput.value.trim();
+                const speed = Number(raw);
+                if (!raw || Number.isNaN(speed) || speed < 0 || speed > 150) {
+                    windHint.textContent = 'Enter a value from 0 to 150 KTS.';
+                    return;
+                }
+                windHint.textContent = '';
+                updateAlertState(() => {
+                    alertState.high_winds.active = true;
+                    alertState.high_winds.knots = speed;
+                }, 'High wind alert activated (' + speed + ' KTS)');
+                btnWind.textContent = 'High Wind (On)';
+            }
+        };
+
+        windSpeedInput.addEventListener('input', () => {
+            windHint.textContent = '';
+            if (alertState.high_winds.active) {
+                const speed = Number(windSpeedInput.value) || 0;
+                if (speed >= 0 && speed <= 150) {
+                    alertState.high_winds.knots = speed;
+                    sendAggregateState('Wind speed updated to ' + speed + ' KTS');
+                }
+            }
+        });
+
+        // ============================================
+        // LIGHTNING ALERT HANDLING (MUTUALLY EXCLUSIVE)
+        // ============================================
+        btnYellow.onclick = () => {
+            if (alertState.lightning.active && alertState.lightning.level === 'yellow') {
+                // Toggle OFF
+                updateAlertState(() => {
+                    alertState.lightning.active = false;
+                    alertState.lightning.level = null;
+                }, 'Yellow alert cleared');
+                btnYellow.textContent = 'Yellow Alert (10 mi)';
+                btnRed.textContent = 'Red Alert (3 mi)';
+            } else {
+                // Toggle ON, deactivate red if active
+                updateAlertState(() => {
+                    alertState.lightning.active = true;
+                    alertState.lightning.level = 'yellow';
+                }, 'Yellow alert activated');
+                btnYellow.textContent = 'Yellow Alert (On)';
+                btnRed.textContent = 'Red Alert (3 mi)';
+            }
+        };
+
+        btnRed.onclick = () => {
+            if (alertState.lightning.active && alertState.lightning.level === 'red') {
+                // Toggle OFF
+                updateAlertState(() => {
+                    alertState.lightning.active = false;
+                    alertState.lightning.level = null;
+                }, 'Red alert cleared');
+                btnRed.textContent = 'Red Alert (3 mi)';
+                btnYellow.textContent = 'Yellow Alert (10 mi)';
+            } else {
+                // Toggle ON, deactivate yellow if active
+                updateAlertState(() => {
+                    alertState.lightning.active = true;
+                    alertState.lightning.level = 'red';
+                }, 'Red alert activated');
+                btnRed.textContent = 'Red Alert (On)';
+                btnYellow.textContent = 'Yellow Alert (10 mi)';
+            }
+        };
+
+        // ============================================
+        // MEMO QUEUE HANDLING
+        // ============================================
+        btnInfo.onclick = () => {
+            const text = memoTextInput.value.trim();
+            if (text === '') {
+                setCommandStatus('Type memo text before sending.', 'error');
+                return;
+            }
+            withSendingState(btnInfo, 'Sending...', () => {
+                const memoId = 'memo_' + Date.now();
+                updateAlertState(() => {
+                    alertState.memos.push({ id: memoId, text: text, timestamp: Date.now() });
+                }, 'Memo added to queue');
+                memoTextInput.value = '';
+            });
+        };
+
+        btnClearMemo.onclick = () => {
+            memoTextInput.value = '';
+            setCommandStatus('Memo input cleared.', null);
+        };
+
+        btnSendContent.onclick = () => {
+            const kind = contentKind.value;
+            const title = contentTitle.value.trim();
+            let payload = '';
+
+            if (selectedFilePayload) {
+                payload = selectedFilePayload;
+            } else if (kind === 'text' || kind === 'html') {
+                payload = contentBody.value.trim();
+                if (!payload) {
+                    contentHint.textContent = 'Enter content before sending.';
+                    return;
+                }
+            } else {
+                payload = sanitizeUrl(contentUrl.value);
+                if (!/^https?:\/\//i.test(payload)) {
+                    contentHint.textContent = 'Enter a valid URL.';
+                    return;
+                }
+            }
+
+            contentHint.textContent = '';
+            withSendingState(btnSendContent, 'Sending...', () => {
+                updateAlertState(() => {
+                    ensureContentDefaults();
+                    alertState.content.active = true;
+                    alertState.content.kind = kind;
+                    alertState.content.payload = payload;
+                    alertState.content.title = title || selectedFileName;
+                    alertState.content.carouselActive = false;
+                }, 'Content package sent (' + kind + ')');
+            });
+        };
+
+        btnClearContent.onclick = () => {
+            contentHint.textContent = '';
+            contentUrl.value = '';
+            contentBody.value = '';
+            contentTitle.value = '';
+            contentFile.value = '';
+            selectedFilePayload = '';
+            selectedFileName = '';
+            updateAlertState(() => {
+                ensureContentDefaults();
+                alertState.content.active = false;
+                alertState.content.kind = null;
+                alertState.content.payload = null;
+                alertState.content.title = '';
+                alertState.content.carouselActive = false;
+            }, 'Rich content cleared');
+        };
+
+        btnAddCarousel.onclick = () => {
+            const item = createContentItemFromInputs();
+            if (!item) {
+                return;
+            }
+
+            contentHint.textContent = '';
+            updateAlertState(() => {
+                ensureContentDefaults();
+                alertState.content.items.push(item);
+                alertState.content.intervalSec = normalizeInterval();
+            }, 'Added item to carousel playlist');
+            renderCarouselList();
+        };
+
+        btnStartCarousel.onclick = () => {
+            ensureContentDefaults();
+            if (!alertState.content.items.length) {
+                contentHint.textContent = 'Add at least one playlist item first.';
+                return;
+            }
+            contentHint.textContent = '';
+            updateAlertState(() => {
+                alertState.content.carouselActive = true;
+                alertState.content.active = true;
+                alertState.content.intervalSec = normalizeInterval();
+            }, 'Carousel started');
+        };
+
+        btnStopCarousel.onclick = () => {
+            ensureContentDefaults();
+            updateAlertState(() => {
+                alertState.content.carouselActive = false;
+            }, 'Carousel stopped');
+        };
+
+        btnClearCarousel.onclick = () => {
+            ensureContentDefaults();
+            updateAlertState(() => {
+                alertState.content.items = [];
+                alertState.content.carouselActive = false;
+            }, 'Carousel playlist cleared');
+            renderCarouselList();
+        };
+
+        contentKind.addEventListener('change', updateContentInputMode);
+        contentFile.addEventListener('change', () => {
+            const file = contentFile.files && contentFile.files[0];
+            selectedFilePayload = '';
+            selectedFileName = '';
+
+            if (!file) {
+                contentHint.textContent = '';
+                return;
+            }
+
+            selectedFileName = file.name;
+            const reader = new FileReader();
+            reader.onload = () => {
+                selectedFilePayload = typeof reader.result === 'string' ? reader.result : '';
+                contentHint.textContent = 'Loaded local file: ' + file.name;
+            };
+            reader.onerror = () => {
+                selectedFilePayload = '';
+                selectedFileName = '';
+                contentHint.textContent = 'Unable to read selected file.';
+            };
+
+            const kind = contentKind.value;
+            if (kind === 'image' || kind === 'video') {
+                reader.readAsDataURL(file);
+            } else {
+                reader.readAsText(file);
+            }
+        });
+
+        dropZone.addEventListener('dragover', (event) => {
+            event.preventDefault();
+            dropZone.style.borderColor = '#2f9bff';
+            dropZone.style.color = '#cde7ff';
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.style.borderColor = '#5e7790';
+            dropZone.style.color = 'var(--text-2)';
+        });
+
+        dropZone.addEventListener('drop', async (event) => {
+            event.preventDefault();
+            dropZone.style.borderColor = '#5e7790';
+            dropZone.style.color = 'var(--text-2)';
+
+            const files = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+            if (!files.length) {
+                contentHint.textContent = 'No files dropped.';
+                return;
+            }
+
+            const newItems = [];
+            for (const file of files) {
+                const kind = inferKindFromFile(file);
+                if (kind !== 'image' && kind !== 'video') {
+                    continue;
+                }
+
+                try {
+                    const payload = await readFileAsPayload(file, kind);
+                    newItems.push({
+                        id: 'item_' + Date.now() + '_' + newItems.length,
+                        kind,
+                        payload,
+                        title: file.name
+                    });
+                } catch (_) {
+                    // Ignore unreadable files and continue processing others.
+                }
+            }
+
+            if (!newItems.length) {
+                contentHint.textContent = 'Drop image/video files to build the carousel.';
+                return;
+            }
+
+            contentHint.textContent = '';
+            updateAlertState(() => {
+                ensureContentDefaults();
+                alertState.content.items = alertState.content.items.concat(newItems);
+                alertState.content.intervalSec = normalizeInterval();
+            }, 'Added ' + newItems.length + ' media files to carousel');
+            renderCarouselList();
+        });
+
+        carouselIntervalInput.addEventListener('change', () => {
+            ensureContentDefaults();
+            const val = normalizeInterval();
+            carouselIntervalInput.value = String(val);
+            alertState.content.intervalSec = val;
+        });
+
+        updateContentInputMode();
+        ensureContentDefaults();
+        renderCarouselList();
+
+        // ============================================
+        // CLEAR ACTIONS
+        // ============================================
+        // Create a container for clear buttons (will add dynamically)
+        const clearButtonsContainer = document.createElement('div');
+        clearButtonsContainer.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px;';
+
+        const btnClearWind = document.createElement('button');
+        btnClearWind.className = 'btn';
+        btnClearWind.textContent = 'Clear Wind';
+        btnClearWind.style.background = 'linear-gradient(160deg, #6b7f90, #536473)';
+        btnClearWind.onclick = () => {
+            alertState.high_winds.active = false;
+            alertState.high_winds.knots = 0;
+            windSpeedInput.value = '';
+            btnWind.textContent = 'High Wind (Off)';
+            windSpeedInput.disabled = false;
+            windHint.textContent = '';
+            sendAggregateState('Wind alert cleared');
+        };
+
+        const btnClearLightning = document.createElement('button');
+        btnClearLightning.className = 'btn';
+        btnClearLightning.textContent = 'Clear Lightning';
+        btnClearLightning.style.background = 'linear-gradient(160deg, #6b7f90, #536473)';
+        btnClearLightning.onclick = () => {
+            alertState.lightning.active = false;
+            alertState.lightning.level = null;
+            btnYellow.textContent = 'Yellow Alert (10 mi)';
+            btnRed.textContent = 'Red Alert (3 mi)';
+            sendAggregateState('Lightning alert cleared');
+        };
+
+        const btnClearMemoQueue = document.createElement('button');
+        btnClearMemoQueue.className = 'btn';
+        btnClearMemoQueue.textContent = 'Clear Memos';
+        btnClearMemoQueue.style.background = 'linear-gradient(160deg, #6b7f90, #536473)';
+        btnClearMemoQueue.onclick = () => {
+            alertState.memos = [];
+            sendAggregateState('All memos cleared');
+        };
+
+        const btnClearAll = document.createElement('button');
+        btnClearAll.className = 'btn';
+        btnClearAll.textContent = 'Clear All';
+        btnClearAll.style.background = 'linear-gradient(160deg, #8f1d1d, #6b1515)';
+        btnClearAll.onclick = () => {
+            alertState.high_winds = { active: false, knots: 0 };
+            alertState.lightning = { active: false, level: null };
+            alertState.memos = [];
+            alertState.content = { active: false, kind: null, payload: null, title: '', carouselActive: false, intervalSec: 8, items: [] };
+            windSpeedInput.value = '';
+            windSpeedInput.disabled = false;
+            memoTextInput.value = '';
+            contentUrl.value = '';
+            contentBody.value = '';
+            contentTitle.value = '';
+            carouselIntervalInput.value = '8';
+            contentFile.value = '';
+            selectedFilePayload = '';
+            selectedFileName = '';
+            btnWind.textContent = 'High Wind (Off)';
+            btnYellow.textContent = 'Yellow Alert (10 mi)';
+            btnRed.textContent = 'Red Alert (3 mi)';
+            windHint.textContent = '';
+            renderCarouselList();
+            sendAggregateState('All alerts cleared');
+        };
+
+        clearButtonsContainer.appendChild(btnClearWind);
+        clearButtonsContainer.appendChild(btnClearLightning);
+        clearButtonsContainer.appendChild(btnClearMemoQueue);
+        clearButtonsContainer.appendChild(btnClearAll);
+
+        controlPanel.appendChild(clearButtonsContainer);
+
+        // ============================================
+        // CONNECTION MANAGEMENT
+        // ============================================
+        function disconnectConnection(isManual) {
+            activeConnectRun += 1;
+            clearTimeout(connectAttemptTimer);
+            clearTimeout(autoReconnectTimer);
+            stopHeartbeat();
+            if (conn) {
+                conn.close();
+                conn = null;
+            }
+            connectPanel.classList.remove('hidden');
+            controlPanel.classList.add('hidden');
+            btnConnect.disabled = false;
+            updateConnectionPill(false);
+            if (isManual) {
+                setStatus('Disconnected from show page.', 'success');
+            }
+            setCommandStatus('Connection closed.', 'error');
+            setDiagnostics({ peerId: '', heartbeat: 'Idle' });
+        }
+
+        function validatePin(pin) {
+            if (!/^\d{4}$/.test(pin)) {
+                pinHint.textContent = 'Pin must be exactly 4 digits.';
+                return false;
+            }
+            pinHint.textContent = '';
+            return true;
+        }
+
+        function makeModernPeerId(pin) {
+            return 'wxstat-show-' + pin;
+        }
+
+        function buildCandidatePeerIds(pin) {
+            return [
+                makeModernPeerId(pin),
+                'alex-dfw-show-' + pin,
+                'dfw-show-' + pin,
+                'show-' + pin,
+                pin
+            ];
+        }
+
+        function tryConnectCandidates(pin, attempt, isAutoReconnect) {
+            const runId = ++activeConnectRun;
+            const candidates = buildCandidatePeerIds(pin);
+            let index = 0;
+            setDiagnostics({ attempt: attempt });
+
+            function nextCandidate() {
+                if (runId !== activeConnectRun) {
+                    return;
+                }
+
+                if (index >= candidates.length) {
+                    if (attempt < MAX_CONNECT_ATTEMPTS) {
+                        const nextAttempt = attempt + 1;
+                        const delay = Math.min(700 * Math.pow(1.5, attempt - 1), 3800) + Math.floor(Math.random() * 160);
+                        setStatus('Show page not found yet. Retrying (' + nextAttempt + '/' + MAX_CONNECT_ATTEMPTS + ') in ' + Math.round(delay) + 'ms...', 'error');
+                        connectAttemptTimer = setTimeout(() => {
+                            tryConnectCandidates(pin, nextAttempt, isAutoReconnect);
+                        }, delay);
+                        return;
+                    }
+                    if (isAutoReconnect) {
+                        beginAutoReconnect('peer-unavailable');
+                        return;
+                    }
+                    btnConnect.disabled = false;
+                    setStatus('Peer unavailable. Keep show page open and refresh it for a new PIN, then reconnect.', 'error');
+                    setDiagnostics({ lastError: 'peer-unavailable' });
+                    return;
+                }
+
+                const peerId = candidates[index++];
+                setStatus('Attempt ' + attempt + '/' + MAX_CONNECT_ATTEMPTS + ': trying ' + peerId + '...', null);
+                setDiagnostics({ peerId: peerId });
+                const candidateConn = peer.connect(peerId, { reliable: true, serialization: 'json' });
+                let opened = false;
+                let settled = false;
+                const openTimeout = setTimeout(() => {
+                    if (runId !== activeConnectRun || settled) {
+                        return;
+                    }
+                    settled = true;
+                    try {
+                        candidateConn.close();
+                    } catch (_) {
+                        // Ignore failed closes on timed-out candidates.
+                    }
+                    nextCandidate();
+                }, 2600);
+
+                candidateConn.on('open', () => {
+                    if (runId !== activeConnectRun || settled) {
+                        return;
+                    }
+                    settled = true;
+                    clearTimeout(openTimeout);
+                    opened = true;
+                    conn = candidateConn;
+                    currentConnectPin = pin;
+                    autoReconnectCycle = 0;
+                    manualDisconnectRequested = false;
+                    connectPanel.classList.add('hidden');
+                    controlPanel.classList.remove('hidden');
+                    updateConnectionPill(true);
+                    setStatus('Connected to show page using ' + peerId + '.', 'success');
+                    setCommandStatus('Connected. Ready to send alerts.', 'success');
+                    setDiagnostics({ peerId: peerId, lastError: '', attempt: attempt });
+                    conn.on('data', handleIncomingControlData);
+                    startHeartbeat();
+                    windSpeedInput.disabled = false;
+                });
+
+                candidateConn.on('close', () => {
+                    if (runId !== activeConnectRun) {
+                        return;
+                    }
+                    if (!opened) {
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(openTimeout);
+                        }
+                        nextCandidate();
+                        return;
+                    }
+                    clearTimeout(openTimeout);
+                    stopHeartbeat();
+                    conn = null;
+                    if (isAutoReconnect) {
+                        beginAutoReconnect('link-closed');
+                        return;
+                    }
+                    beginAutoReconnect('link-closed');
+                });
+
+                candidateConn.on('error', (err) => {
+                    if (runId !== activeConnectRun) {
+                        return;
+                    }
+                    if (!opened) {
+                        if (!settled) {
+                            settled = true;
+                            clearTimeout(openTimeout);
+                        }
+                        if (err && err.type === 'peer-unavailable') {
+                            nextCandidate();
+                            return;
+                        }
+                        nextCandidate();
+                        return;
+                    }
+                    setDiagnostics({ lastError: err?.type || 'connection-error' });
+                    stopHeartbeat();
+                    conn = null;
+                    beginAutoReconnect(err?.type || 'connection-error');
+                });
+            }
+
+            nextCandidate();
+        }
 
         peer.on('open', () => {
-            statusDiv.innerText = "Ready to connect.";
-            btnConnect.innerText = "Connect to Show Page";
+            setStatus('Ready to connect.', 'success');
+            btnConnect.textContent = 'Connect to Show Page';
             btnConnect.disabled = false;
         });
 
         btnConnect.onclick = () => {
             const pin = pinInput.value.trim();
-            if (pin.length !== 4) {
-                alert("Please enter a 4-digit PIN.");
+            if (!validatePin(pin)) {
                 return;
             }
 
-            statusDiv.innerText = "Connecting to Show Page...";
+            manualDisconnectRequested = false;
+            currentConnectPin = pin;
+            clearTimeout(autoReconnectTimer);
+            setStatus('Connecting to show page...', null);
             btnConnect.disabled = true;
-
-            // Connect using the same prefix logic as the show page
-            conn = peer.connect('alex-color-show-' + pin);
-
-            conn.on('open', () => {
-                connectPanel.style.display = 'none';
-                controlPanel.style.display = 'block';
-            });
-
-            conn.on('close', () => {
-                alert("Connection lost.");
-                connectPanel.style.display = 'block';
-                controlPanel.style.display = 'none';
-                btnConnect.disabled = false;
-                statusDiv.innerText = "Disconnected.";
-            });
+            tryConnectCandidates(pin, 1, false);
         };
 
-        // Send color commands
-        btnRed.onclick = () => {
-            if (conn && conn.open) conn.send('red');
+        btnDisconnect.onclick = () => {
+            manualDisconnectRequested = true;
+            disconnectConnection(true);
         };
-        
-        btnYellow.onclick = () => {
-            if (conn && conn.open) conn.send('yellow');
-        };
+
+        pinInput.addEventListener('input', () => {
+            const cleaned = pinInput.value.replace(/\D/g, '').slice(0, 4);
+            if (pinInput.value !== cleaned) {
+                pinInput.value = cleaned;
+            }
+            if (cleaned.length > 0) {
+                validatePin(cleaned);
+            } else {
+                pinHint.textContent = '';
+            }
+        });
 
         peer.on('error', (err) => {
-            statusDiv.innerText = "Error: " + err.type;
+            setStatus('Error: ' + err.type, 'error');
+            setDiagnostics({ lastError: err.type || 'peer-error' });
+            if (currentConnectPin && !manualDisconnectRequested && (!conn || !conn.open)) {
+                beginAutoReconnect(err.type || 'peer-error');
+            }
             btnConnect.disabled = false;
         });
+
+        peer.on('disconnected', () => {
+            setStatus('Signaling disconnected. Reconnecting...', 'error');
+            setDiagnostics({ lastError: 'signaling-disconnected' });
+            try {
+                peer.reconnect();
+            } catch (_) {
+                btnConnect.disabled = false;
+            }
+            if (currentConnectPin && !manualDisconnectRequested && (!conn || !conn.open)) {
+                beginAutoReconnect('signaling-disconnected');
+            }
+        });
+
+        buildStamp.textContent = 'Build ' + APP_VERSION;
+        setDiagnostics({ heartbeat: 'Idle', peerId: '', attempt: 0, lastError: '' });
+        startHeartbeatUiTicker();
     </script>
 </body>
 </html>
