@@ -1,0 +1,3284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DFW Ramp Display</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
+    <style>
+        :root {
+            --bg: #0d1520;
+            --card: rgba(12, 20, 27, 0.88);
+            --line: rgba(126, 162, 195, 0.25);
+            --text-1: #ecf2f7;
+            --text-2: #b9c8d5;
+            --warn-bg: #b45f00;
+            --warn-text: #fff6de;
+            --yellow-bg: #9a7a00;
+            --yellow-text: #fff7dd;
+            --red-bg: #b52424;
+            --red-text: #fff3f3;
+            --info-bg: #0556a8;
+            --info-text: #eff6ff;
+            --idle-bg: #0d1520;
+            --idle-text: #ecf2f7;
+            --brand-bg: #0d1520;
+            --brand-panel: #0c141b;
+            --brand-accent: #2f9bff;
+            --brand-text: #ecf2f7;
+            --safe-margin: 6px;
+            --global-text-scale: 1;
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        body {
+            height: 100vh;
+            height: 100dvh;
+            min-height: 0;
+            font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+            background:
+                radial-gradient(circle at 20% 15%, rgba(47, 155, 255, 0.18), transparent 35%),
+                radial-gradient(circle at 88% 82%, rgba(180, 95, 0, 0.15), transparent 30%),
+                var(--idle-bg);
+            color: var(--text-1);
+            transition: background-color 0.3s ease, color 0.3s ease;
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+            grid-template-areas: "header" "marquee" "content" "weather" "footer";
+        }
+
+        .board-header { grid-area: header; }
+        .marquee-bar { grid-area: marquee; }
+        .board-content { grid-area: content; }
+        .metar-strip { grid-area: weather; }
+        .board-footer { grid-area: footer; }
+
+        body[data-layout="ultrawide"][data-weather-slot="side"] {
+            grid-template-columns: minmax(0, 1fr) minmax(250px, 18vw);
+            grid-template-rows: auto auto minmax(0, 1fr) auto;
+            grid-template-areas: "header header" "marquee marquee" "content weather" "footer footer";
+        }
+
+        body[data-layout="portrait"] #alert-display { --card-columns: 1 !important; }
+        body[data-density="compact"] .board-content { gap: 4px; }
+        body[data-weather-slot="hidden"] { grid-template-rows: auto auto minmax(0, 1fr) 0 auto; }
+        body[data-weather-slot="hidden"] .metar-strip { display: none; }
+        body[data-weather-layout="expanded"] { grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
+        body[data-weather-layout="expanded"][data-weather-slot="hidden"] { grid-template-rows: auto auto minmax(0, 1fr) 0 auto; }
+        body[data-weather-layout="expanded"] .metar-strip { align-items: flex-start; flex-direction: column; justify-content: center; white-space: normal; }
+        body[data-weather-layout="expanded"] #metar-content { white-space: normal; text-overflow: clip; line-height: 1.35; width: 100%; }
+        body[data-layout="ultrawide"][data-weather-slot="side"][data-weather-layout="expanded"] { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+        body[data-layout="ultrawide"][data-weather-slot="side"] .metar-strip {
+            align-items: start;
+            align-content: center;
+            flex-direction: column;
+            white-space: normal;
+            padding: 10px;
+            font-size: clamp(0.68rem, 0.75vw, 0.9rem);
+            width: 100%;
+        }
+
+        body[data-a11y="high-contrast"] { --line: #ffffff; }
+        body[data-a11y="high-contrast"] .signage-card { box-shadow: none; }
+        body[data-a11y="large-text"] { --global-text-scale: 1.15; }
+        body[data-a11y="distance"] { --global-text-scale: 1.28; }
+        body[data-a11y="color-safe"] .signage-card { border-style: double; }
+        body.reduced-motion *, body.reduced-motion *::before, body.reduced-motion *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+
+        .board-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            min-width: 0;
+            padding: 8px 16px;
+            border-bottom: 1.5px solid var(--line);
+            background: rgba(10, 16, 22, 0.7);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-weight: 700;
+            color: var(--text-2);
+            font-size: clamp(0.78rem, 1.4vw, 1.25rem);
+            white-space: nowrap;
+            overflow: hidden;
+        }
+
+        .board-left, .board-right { display: flex; gap: 12px; align-items: center; min-width: 0; }
+
+        .brand-lockup { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .brand-logo { width: 32px; height: 32px; object-fit: contain; border-radius: 6px; }
+        .brand-callsign { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
+
+        .status-badge {
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 0.9em;
+            font-weight: 800;
+            background: rgba(8, 14, 20, 0.7);
+            color: var(--text-2);
+        }
+
+        .status-badge.connected {
+            border-color: rgba(74, 222, 128, 0.55);
+            color: #aaf5c3;
+            background: rgba(22, 85, 45, 0.34);
+        }
+
+        .status-badge.stale {
+            border-color: rgba(217, 119, 6, 0.55);
+            color: #fcd34d;
+            background: rgba(180, 95, 0, 0.25);
+        }
+
+        .build-badge {
+            border: 1px solid rgba(126, 162, 195, 0.45);
+            border-radius: 4px;
+            padding: 1px 5px;
+            font-size: 0.58rem;
+            font-weight: 800;
+            background: rgba(8, 14, 20, 0.7);
+            color: var(--text-2);
+        }
+
+        .diag-panel {
+            width: auto;
+            border: 0;
+            margin: 0;
+            padding: 0;
+        }
+
+        .diag-panel summary {
+            cursor: pointer;
+            padding: 0;
+            font-size: 0.56rem;
+            font-weight: 800;
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+            color: var(--text-2);
+            user-select: none;
+        }
+
+        .diag-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px;
+        }
+
+        .diag-panel[open] .diag-grid {
+            position: fixed;
+            z-index: 50;
+            right: 8px;
+            bottom: 25px;
+            left: 8px;
+            padding: 8px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #0b1219;
+            box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.55);
+        }
+
+        .diag-tile {
+            border: 1px solid rgba(126, 162, 195, 0.35);
+            border-radius: 8px;
+            background: rgba(8, 14, 20, 0.5);
+            padding: 7px 8px;
+        }
+
+        .diag-label {
+            font-size: 0.64rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-2);
+            margin-bottom: 3px;
+            font-weight: 700;
+        }
+
+        .diag-value {
+            font-size: 0.8rem;
+            color: #dce8f4;
+            font-weight: 800;
+            word-break: break-word;
+        }
+
+        .clock-display {
+            display: flex;
+            gap: 16px;
+            font-size: clamp(0.95rem, 1.8vw, 1.45rem);
+            font-family: "Courier New", monospace;
+            font-weight: 800;
+        }
+
+        .clock-item { display: flex; gap: 6px; align-items: center; text-align: right; }
+        .clock-label { font-size: 0.72em; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
+        .clock-time { color: var(--text-1); font-size: 1.05em; }
+
+        .board-content {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) auto;
+            min-height: 0;
+            padding: var(--safe-margin);
+            gap: 6px;
+            overflow: hidden;
+        }
+
+        .main-alert-zone {
+            display: grid;
+            place-items: stretch;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        #status-card {
+            width: 100%;
+            height: 100%;
+            border: 1.5px solid var(--line);
+            border-radius: clamp(10px, 1.2vw, 16px);
+            padding: clamp(16px, 2.5vw, 36px);
+            background: rgba(12, 20, 27, 0.45);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) auto;
+            gap: 24px;
+            align-items: stretch;
+        }
+
+        .status-weather-cockpit {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 0;
+            transition: opacity 0.25s ease-in-out;
+            opacity: 1;
+        }
+
+        .status-weather-cockpit.fade-out {
+            opacity: 0;
+        }
+
+        .status-weather-cockpit .weather-dashboard-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+            gap: clamp(16px, 2.2vh, 32px) !important;
+            width: 100%;
+        }
+
+        @media (max-width: 1600px) {
+            .status-weather-cockpit .weather-dashboard-grid {
+                grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+            }
+        }
+
+        @media (max-width: 1200px) {
+            .status-weather-cockpit .weather-dashboard-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .status-weather-cockpit .weather-dashboard-grid {
+                grid-template-columns: 1fr !important;
+            }
+        }
+
+        .status-weather-cockpit .weather-dash-tile {
+            background: rgba(255, 255, 255, 0.04) !important;
+            border: 1.5px solid rgba(255, 255, 255, 0.08) !important;
+            padding: clamp(16px, 2.2vh, 32px) !important;
+            border-radius: 20px !important;
+            display: flex;
+            align-items: center;
+            gap: clamp(12px, 2vw, 24px) !important;
+            min-height: 0 !important;
+            box-sizing: border-box;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            transition: all 0.3s ease;
+        }
+
+        .status-weather-cockpit .weather-dash-tile:hover {
+            background: rgba(255, 255, 255, 0.06) !important;
+            border-color: rgba(255, 255, 255, 0.12) !important;
+            transform: translateY(-2px);
+        }
+
+        .status-weather-cockpit .weather-dash-label {
+            font-size: clamp(1rem, 2.2vh, 2rem) !important;
+            font-weight: 800 !important;
+            letter-spacing: 0.06em !important;
+            color: var(--text-2) !important;
+            text-transform: uppercase !important;
+            margin-bottom: clamp(4px, 1vh, 12px) !important;
+        }
+
+        .status-weather-cockpit .weather-dash-val {
+            font-size: clamp(1.8rem, 4.2vh, 3.8rem) !important;
+            font-weight: 900 !important;
+            color: #ffffff !important;
+            line-height: 1.15 !important;
+        }
+
+        .status-weather-cockpit .weather-dash-sub {
+            font-size: clamp(0.95rem, 1.8vh, 1.5rem) !important;
+            color: var(--text-3) !important;
+            font-weight: 700 !important;
+            margin-top: clamp(4px, 1vh, 10px) !important;
+        }
+
+        .status-weather-cockpit .weather-dash-tile-detail-text {
+            font-size: clamp(0.95rem, 1.8vh, 1.6rem) !important;
+            font-weight: 700 !important;
+            color: var(--text-3) !important;
+        }
+
+        .status-weather-cockpit .weather-dash-tile-detail-highlight {
+            color: #ffffff !important;
+        }
+
+        .status-weather-cockpit .compass-container {
+            width: clamp(80px, 16vh, 160px) !important;
+            height: clamp(80px, 16vh, 160px) !important;
+        }
+
+        .status-weather-cockpit .weather-dash-icon-wrap {
+            width: clamp(80px, 16vh, 150px) !important;
+            height: clamp(80px, 16vh, 150px) !important;
+        }
+
+        .status-pin-footer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            text-align: center;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            padding-top: 18px;
+        }
+
+        .status-capsule {
+            display: inline-flex;
+            align-items: center;
+            gap: 16px;
+            padding: 8px 24px;
+            border-radius: 999px;
+            transition: all 0.3s ease;
+        }
+
+        .status-capsule.pin-mode {
+            background: rgba(47, 155, 255, 0.12);
+            border: 1.5px solid rgba(47, 155, 255, 0.45);
+            box-shadow: 0 4px 20px rgba(47, 155, 255, 0.15);
+            animation: pin-capsule-glow 2s infinite alternate;
+        }
+
+        .status-capsule.connected-mode {
+            background: rgba(34, 197, 94, 0.12);
+            border: 1.5px solid rgba(34, 197, 94, 0.45);
+            box-shadow: 0 4px 20px rgba(34, 197, 94, 0.15);
+            animation: connected-capsule-glow 2s infinite alternate;
+        }
+
+        @keyframes pin-capsule-glow {
+            0% { box-shadow: 0 4px 12px rgba(47, 155, 255, 0.15); border-color: rgba(47, 155, 255, 0.45); }
+            100% { box-shadow: 0 4px 24px rgba(47, 155, 255, 0.35); border-color: rgba(47, 155, 255, 0.8); }
+        }
+
+        @keyframes connected-capsule-glow {
+            0% { box-shadow: 0 4px 12px rgba(34, 197, 94, 0.15); border-color: rgba(34, 197, 94, 0.45); }
+            100% { box-shadow: 0 4px 24px rgba(34, 197, 94, 0.35); border-color: rgba(34, 197, 94, 0.8); }
+        }
+
+        .status-capsule .pin-lbl {
+            font-size: clamp(0.85rem, 1.6vw, 1.2rem);
+            color: #2f9bff;
+            font-weight: 900;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            transition: color 0.3s ease;
+        }
+
+        #pin-display {
+            font-size: clamp(2rem, 4vw, 3.8rem) !important;
+            font-weight: 900;
+            letter-spacing: 0.08em;
+            color: #ffffff;
+            line-height: 1;
+            font-family: "Courier New", monospace;
+        }
+
+        #connection-text { margin: 0; font-size: clamp(0.9rem, 1.6vw, 1.1rem); color: var(--text-2); font-weight: 600; }
+
+        #alert-display {
+            display: none;
+            width: 100%;
+            height: 100%;
+            min-width: 0;
+            min-height: 0;
+            grid-template-columns: repeat(var(--card-columns, 1), minmax(0, 1fr));
+            grid-template-rows: repeat(var(--card-rows, 1), minmax(0, 1fr));
+            gap: clamp(5px, 0.7vw, 10px);
+            align-items: stretch;
+            overflow: hidden;
+        }
+
+        .signage-card {
+            min-width: 0;
+            min-height: 0;
+            border: 2px solid rgba(255, 255, 255, 0.34);
+            border-radius: clamp(8px, 1vw, 14px);
+            padding: clamp(8px, 1.4vmin, 20px);
+            display: grid;
+            grid-template-rows: auto auto 1fr auto;
+            align-items: center;
+            gap: clamp(3px, 0.7vmin, 9px);
+            text-align: center;
+            overflow: hidden;
+            box-shadow: 0 14px 38px rgba(0, 0, 0, 0.38);
+            container-type: size;
+            font-size: calc(1rem * var(--global-text-scale));
+        }
+
+        .signage-card.is-pulsing { animation: attentionPulse 2s ease-in-out infinite; }
+        @keyframes attentionPulse {
+            0%, 100% {
+                transform: scale(1);
+                filter: brightness(1);
+                box-shadow: 0 14px 38px rgba(0, 0, 0, 0.38);
+            }
+            50% {
+                transform: scale(1.025);
+                filter: brightness(1.2);
+                box-shadow: 0 14px 44px rgba(220, 38, 38, 0.5);
+            }
+        }
+
+        .signage-card-eyebrow {
+            font-size: calc(clamp(0.58rem, 2.6cqi, 1rem) * var(--alert-scale, 1));
+            font-weight: 900;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            opacity: 0.88;
+        }
+
+        .signage-card-title {
+            font-size: calc(clamp(1rem, min(8cqi, 10cqb), 3.5rem) * var(--alert-scale, 1));
+            font-weight: 950;
+            letter-spacing: 0.055em;
+            line-height: 1.22;
+            text-transform: uppercase;
+            text-wrap: balance;
+            word-break: break-word;
+            text-shadow: 0 4px 14px rgba(0, 0, 0, 0.32);
+        }
+
+        .signage-card-body {
+            display: grid;
+            place-items: center;
+            align-self: stretch;
+            min-height: 0;
+            font-size: calc(clamp(1.1rem, min(11cqi, 17cqb), 5.4rem) * var(--alert-scale, 1));
+            font-weight: 950;
+            line-height: 1.05;
+            letter-spacing: 0.025em;
+            text-transform: uppercase;
+            text-wrap: balance;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            text-shadow: 0 4px 14px rgba(0, 0, 0, 0.36);
+        }
+
+        .signage-card-message .signage-card-body {
+            font-size: clamp(1.5rem, min(9cqi, 12cqb), 4.8rem);
+            line-height: 1.25;
+            text-transform: none;
+        }
+
+        .signage-card-message .signage-card-body.long-copy {
+            font-size: clamp(1.2rem, min(6cqi, 8cqb), 3rem);
+            line-height: 1.22;
+        }
+
+        .signage-card-time {
+            font-size: clamp(0.5rem, 2.2cqi, 0.85rem);
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            opacity: 0.78;
+        }
+
+        #alert-display[data-density="compact"] .signage-card,
+        #alert-display[data-density="dense"] .signage-card {
+            padding: clamp(5px, 0.8vmin, 10px);
+            gap: 2px;
+        }
+
+        #alert-display[data-density="dense"] .signage-card-eyebrow,
+        #alert-display[data-density="dense"] .signage-card-time {
+            font-size: clamp(0.46rem, 1.8cqi, 0.66rem);
+        }
+
+        #alert-display[data-density="dense"] .signage-card-title {
+            font-size: clamp(0.76rem, min(5.2cqi, 7cqb), 1.7rem);
+        }
+
+        #alert-display[data-density="dense"] .signage-card-body {
+            font-size: clamp(0.82rem, min(7cqi, 10cqb), 2.4rem);
+        }
+
+        #alert-display[data-density="dense"] .signage-card-message .signage-card-body {
+            font-size: clamp(0.66rem, min(4.5cqi, 7cqb), 1.45rem);
+        }
+
+        #alert-display[data-density="compact"] .signage-card-message .signage-card-body.long-copy {
+            font-size: clamp(0.64rem, min(3cqi, 4.5cqb), 1.1rem);
+        }
+
+        #alert-display[data-density="dense"] .signage-card-message .signage-card-body.long-copy {
+            font-size: clamp(0.5rem, min(2.1cqi, 2.5cqb), 0.76rem);
+            line-height: 1;
+        }
+
+        .signage-card.red {
+            background: linear-gradient(145deg, #d02828, #8f1515);
+            color: #fff;
+        }
+
+        .signage-card.yellow {
+            background: linear-gradient(145deg, #f4cb35, #a77c00);
+            color: #171000;
+            border-color: rgba(255, 248, 200, 0.75);
+        }
+
+        .signage-card.wind {
+            background: linear-gradient(145deg, #ef961d, #a54b00);
+            color: #fff;
+        }
+
+        .signage-card.memo {
+            background: linear-gradient(145deg, #1976c9, #07447e);
+            color: #fff;
+        }
+
+        .signage-card.announcement {
+            background: linear-gradient(145deg, #7947d8, #41217f);
+            color: #fff;
+        }
+
+        .signage-card.update {
+            background: linear-gradient(145deg, #168b9c, #07505d);
+            color: #fff;
+        }
+
+        .secondary-alerts {
+            display: grid;
+            grid-auto-flow: column;
+            gap: 8px;
+            overflow: hidden;
+            padding: 0;
+        }
+
+        .secondary-alerts:empty { display: none; }
+
+        #secondary-zone {
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        #secondary-zone:has(#rich-zone.hidden) { display: none !important; }
+
+        .alert-chip {
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: clamp(6px, 1.2vw, 10px) clamp(8px, 1.4vw, 12px);
+            font-size: clamp(0.75rem, 1vw, 0.88rem);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            white-space: nowrap;
+        }
+
+        .alert-chip.wind { background: rgba(180, 95, 0, 0.35); border-color: rgba(222, 133, 6, 0.6); color: #ffd8a8; }
+
+        .memo-queue { display: grid; gap: 6px; min-height: 20px; max-height: 180px; overflow-y: auto; }
+        .memo-item {
+            border-left: 3px solid rgba(26, 116, 200, 0.7);
+            background: rgba(5, 86, 168, 0.15);
+            padding: clamp(8px, 1.2vw, 12px);
+            border-radius: 6px;
+            font-size: clamp(0.8rem, 1.1vw, 0.95rem);
+            color: #bfd7ff;
+            line-height: 1.3;
+        }
+
+        .rich-zone {
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: rgba(8, 14, 20, 0.55);
+            min-height: 0;
+            max-height: 38dvh;
+            padding: clamp(5px, 0.8vw, 9px);
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            gap: 4px;
+            overflow: hidden;
+        }
+
+        body.has-signage-cards .rich-zone { max-height: 28dvh; }
+
+        body.content-only .board-content { grid-template-rows: 0 minmax(0, 1fr) !important; }
+        body.content-only #secondary-zone,
+        body.content-only .rich-zone,
+        body.content-only #rich-body { height: 100% !important; max-height: none !important; }
+
+        #rich-body {
+            min-width: 0;
+            min-height: 0;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+        }
+
+        .media-stage {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            min-height: 0;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+            background: var(--media-background, #070c12);
+            border-radius: 8px;
+        }
+
+        .media-stage > .media-foreground {
+            position: relative;
+            z-index: 2;
+            width: 100%;
+            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: var(--media-object-fit, contain);
+            object-position: var(--media-focal-x, 50%) var(--media-focal-y, 50%);
+        }
+
+        .media-blur-background {
+            position: absolute;
+            z-index: 1;
+            inset: -20px;
+            width: calc(100% + 40px);
+            height: calc(100% + 40px);
+            object-fit: cover;
+            object-position: var(--media-focal-x, 50%) var(--media-focal-y, 50%);
+            filter: blur(18px) brightness(0.55);
+            transform: scale(1.08);
+            pointer-events: none;
+        }
+
+        .rich-title {
+            font-size: clamp(0.84rem, 1.1vw, 0.96rem);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #dce9f6;
+        }
+
+        .rich-frame {
+            width: 100%;
+            height: 100%;
+            min-height: 0;
+            max-height: 100%;
+            border: 1px solid rgba(126, 162, 195, 0.35);
+            border-radius: 8px;
+            background: rgba(7, 12, 18, 0.7);
+            object-fit: var(--media-object-fit, contain);
+            object-position: var(--media-focal-x, 50%) var(--media-focal-y, 50%);
+        }
+
+        .rich-image {
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+            border: 1px solid rgba(126, 162, 195, 0.35);
+            object-fit: var(--media-object-fit, contain);
+            object-position: var(--media-focal-x, 50%) var(--media-focal-y, 50%);
+        }
+
+        .rich-text {
+            max-width: 100%;
+            max-height: 100%;
+            overflow: hidden;
+            font-size: clamp(1.4rem, 4.5vmin, 3.5rem);
+            line-height: 1.3;
+            color: var(--text-1);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .media-stage > .rich-text {
+            display: grid;
+            place-items: center;
+            text-align: center;
+            width: 100%;
+            height: 100%;
+            padding: 24px;
+            box-sizing: border-box;
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        .metar-strip {
+            display: none !important;
+            border-top: 1.5px solid var(--line);
+            border-bottom: 1.5px solid var(--line);
+            background: rgba(10, 16, 22, 0.6);
+            min-width: 0;
+            padding: 8px 16px;
+            font-size: clamp(0.78rem, 1.4vw, 1.25rem);
+            color: var(--text-2);
+            font-family: "Courier New", monospace;
+            line-height: 1.25;
+            overflow: hidden;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: slideIn 0.4s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .metar-header { flex: 0 0 auto; font-weight: 700; color: var(--text-1); font-size: 0.9em; margin: 0; }
+        #metar-content { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .idle-clock-zone {
+            display: grid;
+            gap: 24px;
+            align-items: center;
+            text-align: center;
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .idle-clock-display { display: grid; gap: 16px; font-family: "Courier New", monospace; }
+        .clock-large {
+            font-size: clamp(3rem, 12vw, 8rem);
+            font-weight: 900;
+            color: #ffffff;
+            letter-spacing: 0.08em;
+            line-height: 1;
+            text-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        }
+
+        .clock-label-large {
+            font-size: clamp(1rem, 2.4vw, 1.5rem);
+            color: var(--text-2);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-weight: 700;
+        }
+
+        .idle-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-top: 20px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .status-tile {
+            border: 1px solid rgba(74, 222, 128, 0.3);
+            border-radius: 10px;
+            padding: 14px;
+            background: rgba(22, 85, 45, 0.15);
+            text-align: center;
+        }
+
+        .status-tile-label {
+            font-size: 0.8rem;
+            color: var(--text-2);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .status-tile-value {
+            font-size: 1.4rem;
+            color: #aaf5c3;
+            font-weight: 800;
+        }
+
+        .board-footer {
+            display: none !important;
+            border-top: 1px solid var(--line);
+            background: rgba(10, 16, 22, 0.6);
+            min-width: 0;
+            padding: 6px 12px;
+            color: var(--text-2);
+            font-size: clamp(0.72rem, 1.3vw, 1.1rem);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: nowrap;
+            overflow: hidden;
+        }
+
+        .hidden { display: none !important; }
+
+        @media (max-width: 640px) {
+            body { grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
+            .board-header { padding: 1px 4px; }
+            .board-left > span:first-child, .build-badge, .clock-label { display: none; }
+            .clock-display { gap: 5px; }
+            .board-content { padding: 4px; gap: 4px; }
+            .metar-strip { padding: 1px 4px; }
+            .board-footer { padding: 0 4px; }
+        }
+
+        /* Marquee Bar styling */
+        .marquee-bar {
+            grid-area: marquee;
+            border-bottom: 1px solid var(--line);
+            background: rgba(12, 20, 27, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 6px 14px;
+            font-size: clamp(0.78rem, 1.4vw, 1.25rem);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            height: 36px;
+            overflow: hidden;
+        }
+        .marquee-bar.hidden { display: none !important; }
+        .marquee-header {
+            flex: 0 0 auto;
+            background: var(--brand-accent, #2f9bff);
+            color: #000;
+            padding: 3px 8px;
+            border-radius: 5px;
+            font-size: clamp(0.68rem, 1.3vw, 1.1rem);
+            font-weight: 900;
+        }
+        .marquee-wrapper {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+            height: 100%;
+            display: flex;
+            align-items: center;
+        }
+        .marquee-text {
+            display: inline-block;
+            white-space: nowrap;
+            position: absolute;
+            will-change: transform;
+            animation: marquee-scroll 25s linear infinite;
+        }
+        @keyframes marquee-scroll {
+            0% { transform: translateX(100vw); }
+            100% { transform: translateX(-100%); }
+        }
+
+        /* Weather dashboard and animated icons styling */
+        .weather-dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            width: 100%;
+            padding: 8px 0;
+        }
+        .weather-dash-tile {
+            border: 1.5px solid var(--line);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.04);
+            backdrop-filter: blur(4px);
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            min-width: 0;
+        }
+        .weather-dash-icon-wrap {
+            width: 60px;
+            height: 60px;
+            flex: 0 0 auto;
+        }
+        .weather-dash-details {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .weather-dash-label {
+            font-size: clamp(0.72rem, 1.4cqi, 1.15rem);
+            color: var(--text-2);
+            text-transform: uppercase;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            margin-bottom: 2px;
+        }
+        .weather-dash-val {
+            font-size: clamp(1.1rem, 2.2cqi, 1.85rem);
+            font-weight: 800;
+            color: var(--text-1);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.15;
+        }
+        .weather-dash-sub {
+            font-size: clamp(0.68rem, 1.3cqi, 1rem);
+            color: var(--text-2);
+            margin-top: 2px;
+        }
+        .compass-container {
+            width: 76px;
+            height: 76px;
+            flex: 0 0 auto;
+        }
+        .compass-svg {
+            width: 100%;
+            height: 100%;
+            overflow: visible;
+        }
+        @keyframes compassPulseWarn {
+            0%, 100% { opacity: 0.45; stroke-width: 4.5px; }
+            50% { opacity: 1.0; stroke-width: 6.5px; }
+        }
+        @keyframes compassFlashDanger {
+            0%, 100% { opacity: 0.4; stroke: #ef4444; stroke-width: 4.5px; }
+            50% { opacity: 1.0; stroke: #fca5a5; stroke-width: 7px; }
+        }
+        .compass-pulse-warn {
+            animation: compassPulseWarn 1.5s infinite ease-in-out;
+        }
+        .compass-flash-danger {
+            animation: compassFlashDanger 0.8s infinite ease-in-out;
+        }
+        .weather-icon-svg {
+            width: 100%;
+            height: 100%;
+        }
+        .weather-icon-svg.sun {
+            animation: weather-float 6s ease-in-out infinite;
+        }
+        .sun-rays {
+            transform-origin: 32px 32px;
+            animation: weather-spin 20s linear infinite;
+        }
+        .weather-icon-svg.rain {
+            animation: weather-float 6s ease-in-out infinite;
+        }
+        .rain-drop {
+            animation: weather-rain 1.2s ease-in-out infinite;
+        }
+        .drop-2 { animation-delay: 0.4s; }
+        .drop-3 { animation-delay: 0.8s; }
+        .lightning-flash {
+            animation: weather-flash 3s ease-in-out infinite;
+        }
+        @keyframes weather-spin {
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes weather-float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-2px); }
+        }
+        @keyframes weather-rain {
+            0% { opacity: 0; transform: translateY(-4px); }
+            50% { opacity: 1; }
+            100% { opacity: 0; transform: translateY(6px); }
+        }
+        @keyframes weather-flash {
+            0%, 90%, 100% { opacity: 0.15; }
+            92%, 96% { opacity: 1; }
+        }
+
+        /* FIDS table styles */
+        .fids-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: clamp(1rem, min(3.8cqi, 4.2cqb), 2.2rem);
+            margin: 10px 0;
+            text-align: left;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .fids-table th, .fids-table td {
+            padding: clamp(6px, 1.2vmin, 14px) clamp(8px, 1.5vmin, 18px);
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+        }
+        .fids-table th {
+            font-weight: 800;
+            background: rgba(0, 0, 0, 0.45);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--brand-accent, #2f9bff);
+        }
+        .fids-table td[data-status="OK"] { color: #4ade80; font-weight: 800; }
+        .fids-table td[data-status="WARN"] { color: #fbbf24; font-weight: 800; }
+        .fids-table td[data-status="DANGER"] { color: #f87171; font-weight: 800; }
+ 
+        /* Checklist styles */
+        .checklist-progress-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+            width: 100%;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 6px 12px;
+            border-radius: 8px;
+        }
+        .checklist-progress-bar-wrap {
+            flex: 1;
+            height: 12px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .checklist-progress-bar {
+            height: 100%;
+            background: var(--brand-accent, #2f9bff);
+            border-radius: 6px;
+            transition: width 0.4s ease;
+        }
+        .checklist-progress-label {
+            font-size: clamp(0.8rem, 2cqi, 1.4rem);
+            font-weight: 800;
+            white-space: nowrap;
+        }
+        .checklist-items {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            text-align: left;
+            font-size: clamp(1rem, min(3.8cqi, 4.5cqb), 2.5rem);
+            display: grid;
+            gap: 8px;
+        }
+        .checklist-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 4px 8px;
+            border-radius: 6px;
+        }
+        .checklist-item.done {
+            opacity: 0.75;
+        }
+        .checklist-item.done .check-text {
+            text-decoration: line-through;
+            opacity: 0.8;
+        }
+        .checklist-non-item {
+            list-style: none;
+            font-size: 0.8em;
+            opacity: 0.7;
+            padding: 2px 8px;
+        }
+        .chk-box {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.15em;
+            height: 1.15em;
+            flex: 0 0 auto;
+        }
+        .chk-box svg {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        .chk-box.checked { color: #4ade80; }
+        .chk-box.unchecked { color: rgba(255, 255, 255, 0.4); }
+
+        /* Countdown timer style */
+        .card-countdown-timer {
+            font-size: clamp(1.4rem, min(14cqi, 18cqb), 3.8rem);
+            font-weight: 900;
+            font-family: "Courier New", Courier, monospace;
+            color: #ffffff;
+            letter-spacing: 0.08em;
+            text-shadow: 0 0 12px rgba(255, 255, 255, 0.4);
+            margin: 6px 0;
+            display: block;
+        }
+        .card-countdown-timer.expired {
+            color: #f87171;
+            text-shadow: 0 0 12px rgba(248, 113, 113, 0.4);
+            animation: weather-flash 1s ease-in-out infinite;
+        }
+
+        /* PCA Safety Advisories on Show Screen */
+        .pca-show-advisory {
+            margin-top: 25px;
+            padding: 16px 22px;
+            border-radius: 16px;
+            width: 100%;
+            max-width: 720px;
+            box-sizing: border-box;
+            font-size: clamp(1.2rem, min(4.8cqi, 5cqb), 2.5rem);
+            line-height: 1.35;
+            text-transform: none;
+            letter-spacing: normal;
+            font-weight: 700;
+            text-shadow: none;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .pca-show-warn {
+            background: #fde047;
+            border: 2.5px solid #eab308;
+            color: #111827;
+            animation: pca-show-pulse-warn 2s infinite alternate;
+        }
+
+        .pca-show-danger {
+            background: #fca5a5;
+            border: 2.5px solid #dc2626;
+            color: #111827;
+            font-weight: 800;
+            animation: pca-show-pulse-danger 1.5s infinite alternate;
+        }
+
+        .pca-show-advisory .pca-title {
+            font-size: 0.82em;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            opacity: 0.9;
+            margin-bottom: 6px;
+            font-weight: 800;
+        }
+
+        .pca-show-advisory .pca-desc {
+            font-size: 1.05em;
+        }
+
+        @keyframes pca-show-pulse-warn {
+            0% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0px rgba(234, 179, 8, 0); }
+            100% { box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 16px rgba(234, 179, 8, 0.6); }
+        }
+
+        @keyframes pca-show-pulse-danger {
+            0% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 0px rgba(220, 38, 38, 0); }
+            100% { box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45), 0 0 24px rgba(220, 38, 38, 0.7); }
+        }
+
+        /* Fullscreen Media Slot Layout */
+        body.media-fullscreen .board-header,
+        body.media-fullscreen .main-alert-zone,
+        body.media-fullscreen #weather-bar,
+        body.media-fullscreen #marquee-bar {
+            display: none !important;
+        }
+
+        body.media-fullscreen .board-content {
+            grid-template-rows: 1fr !important;
+            height: 100vh !important;
+            height: 100dvh !important;
+            padding: 0 !important;
+            gap: 0 !important;
+        }
+
+        body.media-fullscreen #secondary-zone {
+            height: 100% !important;
+        }
+
+        body.media-fullscreen .rich-zone {
+            max-height: 100vh !important;
+            max-height: 100dvh !important;
+            height: 100% !important;
+            border: none !important;
+            border-radius: 0 !important;
+            padding: 0 !important;
+            background: transparent !important;
+            grid-template-rows: 1fr !important;
+        }
+
+        body.media-fullscreen .rich-zone .rich-title {
+            display: none !important;
+        }
+
+        body.media-fullscreen .media-stage {
+            border-radius: 0 !important;
+        }
+
+        body.media-fullscreen .rich-frame,
+        body.media-fullscreen .rich-image {
+            border: none !important;
+            border-radius: 0 !important;
+        }
+    </style>
+</head>
+<body>
+    <header class="board-header">
+        <div class="board-left">
+            <span class="brand-lockup"><img id="brand-logo" class="brand-logo hidden" alt=""><span id="brand-callsign" class="brand-callsign">DFW Ramp Alert Display</span></span>
+            <div id="conn-badge" class="status-badge" aria-live="polite">Offline</div>
+            <div id="metar-badge" class="status-badge" aria-live="polite">WX: Loading</div>
+            <div id="build-stamp" class="build-badge">Build --</div>
+        </div>
+        <div class="board-right">
+            <div class="clock-display">
+                <div class="clock-item">
+                    <div class="clock-label">DFW</div>
+                    <div id="clock-dfw" class="clock-time">--:--:--</div>
+                </div>
+                <div class="clock-item">
+                    <div class="clock-label">UTC</div>
+                    <div id="clock-utc" class="clock-time">--:--:--</div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <section id="marquee-bar" class="marquee-bar hidden">
+        <div class="marquee-header">Operations Ticker</div>
+        <div class="marquee-wrapper">
+            <div id="marquee-text" class="marquee-text">Loading ticker updates...</div>
+        </div>
+    </section>
+
+    <section class="board-content">
+        <div class="main-alert-zone">
+            <article id="status-card" role="status" aria-live="polite">
+                <div id="status-weather-cockpit" class="status-weather-cockpit">
+                    <div style="font-size: 1.25rem; font-weight: 800; color: var(--text-3); text-transform: uppercase; letter-spacing:0.06em;">Loading DFW Observations...</div>
+                </div>
+                <div class="status-pin-footer">
+                    <div id="status-capsule" class="status-capsule pin-mode">
+                        <span id="status-capsule-label" class="pin-lbl">Connection PIN</span>
+                        <span id="pin-display">....</span>
+                    </div>
+                    <p id="connection-text">Initializing connection...</p>
+                </div>
+            </article>
+            <div id="alert-display" role="alert" aria-live="assertive"></div>
+        </div>
+
+        <div id="secondary-zone" style="display: grid; gap: 8px;">
+            <div id="secondary-alerts" class="secondary-alerts"></div>
+            <div id="rich-zone" class="rich-zone hidden">
+                <div id="rich-title" class="rich-title">Content Package</div>
+                <div id="rich-body"></div>
+            </div>
+            <div id="memo-zone" class="hidden">
+                <div style="font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); margin-bottom: 6px;">Active Memos:</div>
+                <div id="memo-queue" class="memo-queue"></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="metar-strip">
+        <div class="metar-header">DFW Weather</div>
+        <div id="metar-content">Loading weather data...</div>
+    </section>
+
+    <footer class="board-footer">
+        <div id="footer-status">Status: Initializing</div>
+        <div id="footer-time">Updated: --:--</div>
+        <details class="diag-panel" aria-label="Display diagnostics">
+            <summary>Connection diagnostics</summary>
+            <div class="diag-grid">
+                <div class="diag-tile"><div class="diag-label">Last Error</div><div id="diag-last-error" class="diag-value">None</div></div>
+                <div class="diag-tile"><div class="diag-label">Attempt Count</div><div id="diag-attempt" class="diag-value">0</div></div>
+                <div class="diag-tile"><div class="diag-label">Active Transport</div><div id="diag-peer-id" class="diag-value">None</div></div>
+                <div class="diag-tile"><div class="diag-label">Heartbeat</div><div id="diag-heartbeat" class="diag-value">Idle</div></div>
+            </div>
+        </details>
+    </footer>
+
+    <script>
+        const alertState = {
+            high_winds: { active: false, knots: 0 },
+            lightning: { active: false, level: null },
+            memos: [],
+            content: { active: false, kind: null, payload: null, title: '', carouselActive: false, intervalSec: 8, items: [] }
+        };
+
+        function generatePin() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        let pin = generatePin();
+        const pinDisplay = document.getElementById('pin-display');
+        const connectionText = document.getElementById('connection-text');
+        const alertDisplay = document.getElementById('alert-display');
+        const statusCard = document.getElementById('status-card');
+        const connBadge = document.getElementById('conn-badge');
+        const metarBadge = document.getElementById('metar-badge');
+        const metarContent = document.getElementById('metar-content');
+        const secondaryAlerts = document.getElementById('secondary-alerts');
+        const richZone = document.getElementById('rich-zone');
+        const richTitle = document.getElementById('rich-title');
+        const richBody = document.getElementById('rich-body');
+        const memoZone = document.getElementById('memo-zone');
+        const memoQueue = document.getElementById('memo-queue');
+        const footerStatus = document.getElementById('footer-status');
+        const footerTime = document.getElementById('footer-time');
+        const clockDfw = document.getElementById('clock-dfw');
+        const clockUtc = document.getElementById('clock-utc');
+        const buildStamp = document.getElementById('build-stamp');
+        const diagLastError = document.getElementById('diag-last-error');
+        const diagAttempt = document.getElementById('diag-attempt');
+        const diagPeerId = document.getElementById('diag-peer-id');
+        const diagHeartbeat = document.getElementById('diag-heartbeat');
+        const brandLogo = document.getElementById('brand-logo');
+        const brandCallsign = document.getElementById('brand-callsign');
+        const boardRight = document.querySelector('.board-right');
+
+        let conn = null;
+        let peer = null;
+        let legacyPeer = null;
+        let lastMetar = null;
+        let metarStale = false;
+        let carouselTimer = null;
+        let carouselIndex = 0;
+        let carouselIntervalSec = 8;
+        let carouselItemsKey = '';
+        let lastInboundSeq = 0;
+        let lastInboundSender = '';
+        let peerGeneration = 0;
+        let heartbeatRxTs = 0;
+        let heartbeatUiTimer = null;
+        let peerControlConnected = false;
+        let mqttControlConnected = false;
+        let mqttShowClient = null;
+        let mqttPresenceTimer = null;
+        let mqttControlLastSeenTs = 0;
+        const APP_VERSION = '2026.07.16-r6';
+        const MAX_ACTIVE_MESSAGES = 10;
+        const MQTT_BROKER_URL = 'wss://broker.hivemq.com:8884/mqtt';
+        const SETTINGS_STORAGE_KEY = 'wxstat_display_settings_v1';
+        const SETTINGS_SCHEMA_VERSION = 1;
+        const MAX_LOGO_DATA_LENGTH = 131072;
+        const ALERT_STYLE_KEYS = ['wind', 'yellow', 'red', 'memo', 'announcement', 'update', 'custom'];
+        const WEATHER_FIELD_KEYS = ['time', 'description', 'temperature', 'dewpoint', 'humidity', 'wind', 'gust', 'visibility', 'pressure'];
+        const THEME_PRESETS = {
+            'airport-night': { bg: '#0d1520', panel: '#0c141b', accent: '#2f9bff', text: '#ecf2f7' },
+            'ramp-day': { bg: '#e8edf1', panel: '#ffffff', accent: '#005ea8', text: '#111820' },
+            'high-contrast': { bg: '#000000', panel: '#090909', accent: '#00ffff', text: '#ffffff' },
+            'color-safe': { bg: '#101820', panel: '#192733', accent: '#56b4e9', text: '#ffffff' },
+            'aurora-ops': { bg: '#0a0e14', panel: '#0e1a15', accent: '#0df27b', text: '#e3f7ed' },
+            'sunset-terminal': { bg: '#120917', panel: '#1a0c22', accent: '#ff9933', text: '#faeff8' },
+            'cyber-ramp': { bg: '#05000d', panel: '#12021c', accent: '#ff007f', text: '#e1f7ff' }
+        };
+        const DEFAULT_ALERT_STYLES = {
+            wind: { label: 'High Wind', icon: 'WIND', bg: '#efaa45', bg2: '#d17d13', text: '#171000', border: '#fff0c7', borderWidth: 2, textScale: 1, pulse: false },
+            yellow: { label: 'Yellow Alert', icon: 'LGT', bg: '#f4cb35', bg2: '#a77c00', text: '#171000', border: '#fff8c8', borderWidth: 2, textScale: 1, pulse: false },
+            red: { label: 'Red Alert', icon: 'STOP', bg: '#d02828', bg2: '#8f1515', text: '#ffffff', border: '#ffd0d0', borderWidth: 3, textScale: 1, pulse: true },
+            memo: { label: 'Information Memo', icon: 'INFO', bg: '#1976c9', bg2: '#07447e', text: '#ffffff', border: '#b8dcff', borderWidth: 2, textScale: 1, pulse: false },
+            announcement: { label: 'Announcement', icon: 'PA', bg: '#7947d8', bg2: '#41217f', text: '#ffffff', border: '#ddccff', borderWidth: 2, textScale: 1, pulse: false },
+            update: { label: 'Operational Update', icon: 'OPS', bg: '#087282', bg2: '#064b56', text: '#ffffff', border: '#bcecf2', borderWidth: 2, textScale: 1, pulse: false },
+            custom: { label: 'Custom Notice', icon: 'NOTE', bg: '#465b6f', bg2: '#263746', text: '#ffffff', border: '#c7d6e3', borderWidth: 2, textScale: 1, pulse: false }
+        };
+        const DEFAULT_DISPLAY_SETTINGS = {
+            schemaVersion: SETTINGS_SCHEMA_VERSION,
+            revision: 1,
+            brand: { theme: 'airport-night', profileName: 'DFW Operations', callsign: 'DFW Ramp Alert Display', logo: '', font: 'industrial', density: 'comfortable', colors: { ...THEME_PRESETS['airport-night'] }, profiles: [] },
+            layout: { preset: 'tv', safeMargin: 8, mediaSlot: 'secondary', weatherSlot: 'bottom', clockVisible: true, tickerVisible: true },
+            alerts: JSON.parse(JSON.stringify(DEFAULT_ALERT_STYLES)),
+            media: { fit: 'contain', background: '#070c12', focalX: 50, focalY: 50 },
+            weather: { fields: ['time', 'description', 'temperature', 'humidity', 'wind'], units: 'aviation', precision: 1, abbreviations: true, staleMinutes: 10, layout: 'compact' },
+            templates: [],
+            accessibility: { profile: 'standard', reducedMotion: false }
+        };
+
+        function cloneJson(value) { return JSON.parse(JSON.stringify(value)); }
+        function clampNumber(value, min, max, fallback) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback; }
+        function normalizeColor(value, fallback) { return /^#[0-9a-f]{6}$/i.test(String(value || '')) ? String(value).toLowerCase() : fallback; }
+        function relativeLuminance(hex) {
+            const value = normalizeColor(hex, '#000000').slice(1);
+            const channels = [value.slice(0, 2), value.slice(2, 4), value.slice(4, 6)].map((part) => {
+                const channel = parseInt(part, 16) / 255;
+                return channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+        }
+        function contrastRatio(first, second) {
+            const a = relativeLuminance(first);
+            const b = relativeLuminance(second);
+            return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+        }
+        function normalizeLogo(value) {
+            const logo = String(value || '').trim();
+            if (/^https:\/\/[^\s]+$/i.test(logo)) return logo.slice(0, 2048);
+            if (/^data:image\/(?:png|jpeg|webp|svg\+xml);base64,/i.test(logo) && logo.length <= MAX_LOGO_DATA_LENGTH) return logo;
+            return '';
+        }
+        function normalizeDisplaySettings(raw) {
+            const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+            const settings = cloneJson(DEFAULT_DISPLAY_SETTINGS);
+            settings.revision = Math.max(1, Math.floor(clampNumber(source.revision, 1, Number.MAX_SAFE_INTEGER, 1)));
+            const brand = source.brand && typeof source.brand === 'object' ? source.brand : {};
+            settings.brand.theme = ['airport-night', 'ramp-day', 'high-contrast', 'color-safe', 'custom'].includes(brand.theme) ? brand.theme : settings.brand.theme;
+            settings.brand.profileName = String(brand.profileName || settings.brand.profileName).trim().slice(0, 40) || settings.brand.profileName;
+            settings.brand.callsign = String(brand.callsign || settings.brand.callsign).trim().slice(0, 40) || settings.brand.callsign;
+            settings.brand.logo = normalizeLogo(brand.logo);
+            settings.brand.font = ['industrial', 'system', 'condensed', 'mono'].includes(brand.font) ? brand.font : settings.brand.font;
+            settings.brand.density = ['comfortable', 'compact'].includes(brand.density) ? brand.density : settings.brand.density;
+            const preset = THEME_PRESETS[settings.brand.theme] || THEME_PRESETS['airport-night'];
+            const colors = brand.colors && typeof brand.colors === 'object' ? brand.colors : {};
+            settings.brand.colors = { bg: normalizeColor(colors.bg, preset.bg), panel: normalizeColor(colors.panel, preset.panel), accent: normalizeColor(colors.accent, preset.accent), text: normalizeColor(colors.text, preset.text) };
+            if (contrastRatio(settings.brand.colors.text, settings.brand.colors.bg) < 4.5) settings.brand.colors = { ...preset };
+            const layout = source.layout && typeof source.layout === 'object' ? source.layout : {};
+            settings.layout.preset = ['tv', 'ultrawide', 'tablet', 'portrait'].includes(layout.preset) ? layout.preset : settings.layout.preset;
+            settings.layout.safeMargin = Math.round(clampNumber(layout.safeMargin, 4, 48, 8));
+            settings.layout.mediaSlot = ['secondary', 'fullscreen', 'hidden'].includes(layout.mediaSlot) ? layout.mediaSlot : settings.layout.mediaSlot;
+            settings.layout.weatherSlot = ['bottom', 'side', 'hidden'].includes(layout.weatherSlot) ? layout.weatherSlot : settings.layout.weatherSlot;
+            settings.layout.clockVisible = layout.clockVisible !== false;
+            settings.layout.tickerVisible = layout.tickerVisible !== false;
+            ALERT_STYLE_KEYS.forEach((key) => {
+                const input = source.alerts && typeof source.alerts[key] === 'object' ? source.alerts[key] : {};
+                const fallback = DEFAULT_ALERT_STYLES[key];
+                settings.alerts[key] = { label: String(input.label || fallback.label).trim().slice(0, 32) || fallback.label, icon: String(input.icon || fallback.icon).trim().slice(0, 8) || fallback.icon, bg: normalizeColor(input.bg, fallback.bg), bg2: normalizeColor(input.bg2, fallback.bg2), text: normalizeColor(input.text, fallback.text), border: normalizeColor(input.border, fallback.border), borderWidth: Math.round(clampNumber(input.borderWidth, 1, 6, fallback.borderWidth)), textScale: clampNumber(input.textScale, 0.8, 1.35, 1), pulse: Boolean(input.pulse) };
+                if (Math.min(contrastRatio(settings.alerts[key].text, settings.alerts[key].bg), contrastRatio(settings.alerts[key].text, settings.alerts[key].bg2)) < 4.5) {
+                    settings.alerts[key] = { ...settings.alerts[key], bg: fallback.bg, bg2: fallback.bg2, text: fallback.text, border: fallback.border };
+                }
+            });
+            const media = source.media && typeof source.media === 'object' ? source.media : {};
+            settings.media.fit = ['contain', 'cover', 'stretch', 'letterbox', 'blur'].includes(media.fit) ? media.fit : settings.media.fit;
+            settings.media.background = normalizeColor(media.background, settings.media.background);
+            settings.media.focalX = Math.round(clampNumber(media.focalX, 0, 100, 50));
+            settings.media.focalY = Math.round(clampNumber(media.focalY, 0, 100, 50));
+            const weather = source.weather && typeof source.weather === 'object' ? source.weather : {};
+            const fields = Array.isArray(weather.fields) ? weather.fields.filter((field, index, all) => WEATHER_FIELD_KEYS.includes(field) && all.indexOf(field) === index) : [];
+            settings.weather.fields = fields.length ? fields : settings.weather.fields;
+            settings.weather.units = ['aviation', 'imperial', 'metric'].includes(weather.units) ? weather.units : settings.weather.units;
+            settings.weather.precision = Math.round(clampNumber(weather.precision, 0, 2, 1));
+            settings.weather.abbreviations = weather.abbreviations !== false;
+            settings.weather.staleMinutes = Math.round(clampNumber(weather.staleMinutes, 2, 60, 10));
+            settings.weather.layout = ['compact', 'expanded'].includes(weather.layout) ? weather.layout : settings.weather.layout;
+            const defaultTemplates = cloneJson(DEFAULT_DISPLAY_SETTINGS.templates);
+            const loadedTemplates = Array.isArray(source.templates) ? source.templates.slice(0, 24).map((template) => ({ id: String(template?.id || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40), name: String(template?.name || '').trim().slice(0, 40), category: ['memo', 'announcement', 'update'].includes(template?.category) ? template.category : 'memo', title: String(template?.title || '').trim().slice(0, 60), body: String(template?.body || '').trim().slice(0, 500), fields: Array.isArray(template?.fields) ? template.fields.slice(0, 12) : [] })).filter((template) => template.id && template.name && template.body) : [];
+            const templatesMap = new Map();
+            defaultTemplates.forEach(t => templatesMap.set(t.id, t));
+            loadedTemplates.forEach(t => templatesMap.set(t.id, t));
+            settings.templates = Array.from(templatesMap.values());
+            const accessibility = source.accessibility && typeof source.accessibility === 'object' ? source.accessibility : {};
+            settings.accessibility.profile = ['standard', 'high-contrast', 'color-safe', 'large-text', 'distance'].includes(accessibility.profile) ? accessibility.profile : settings.accessibility.profile;
+            settings.accessibility.reducedMotion = Boolean(accessibility.reducedMotion);
+            return settings;
+        }
+
+        function loadDisplaySettings() {
+            try { return normalizeDisplaySettings(JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || 'null')); } catch (_) { return normalizeDisplaySettings(null); }
+        }
+
+        function persistDisplaySettings(settings) {
+            try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings)); } catch (_) { setDiagnostics({ lastError: 'settings-cache-unavailable' }); }
+        }
+
+        let displaySettings = loadDisplaySettings();
+        const PEER_CONFIG = {
+            host: '0.peerjs.com',
+            port: 443,
+            path: '/',
+            secure: true,
+            debug: 1
+        };
+
+        function relayTopic(pinCode, suffix) {
+            return 'wxstat/dfw-ramp/v3/' + pinCode + '/' + suffix;
+        }
+
+        function applyDisplaySettings(settings, persist) {
+            displaySettings = normalizeDisplaySettings(settings);
+            const root = document.documentElement;
+            const brand = displaySettings.brand;
+            const colors = brand.colors;
+            const fontFamilies = {
+                industrial: '"Segoe UI", "Trebuchet MS", sans-serif',
+                system: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+                condensed: '"Arial Narrow", "Roboto Condensed", "Segoe UI", sans-serif',
+                mono: '"Courier New", Consolas, monospace'
+            };
+            root.style.setProperty('--brand-bg', colors.bg);
+            root.style.setProperty('--brand-panel', colors.panel);
+            root.style.setProperty('--brand-accent', colors.accent);
+            root.style.setProperty('--brand-text', colors.text);
+            root.style.setProperty('--idle-bg', colors.bg);
+            root.style.setProperty('--idle-text', colors.text);
+            root.style.setProperty('--bg', colors.bg);
+            root.style.setProperty('--card', colors.panel);
+            root.style.setProperty('--text-1', colors.text);
+            root.style.setProperty('--safe-margin', displaySettings.layout.safeMargin + 'px');
+            document.body.style.fontFamily = fontFamilies[brand.font] || fontFamilies.industrial;
+            document.body.dataset.layout = displaySettings.layout.preset;
+            document.body.dataset.density = brand.density;
+            document.body.dataset.weatherSlot = displaySettings.layout.weatherSlot;
+            document.body.dataset.weatherLayout = displaySettings.weather.layout;
+            document.body.dataset.a11y = displaySettings.accessibility.profile;
+            document.body.classList.toggle('reduced-motion', displaySettings.accessibility.reducedMotion || matchMedia('(prefers-reduced-motion: reduce)').matches);
+            document.body.classList.toggle('media-fullscreen', displaySettings.layout.mediaSlot === 'fullscreen');
+            boardRight.classList.toggle('hidden', !displaySettings.layout.clockVisible);
+            brandCallsign.textContent = brand.callsign;
+            const marqueeBar = document.getElementById('marquee-bar');
+            if (marqueeBar) {
+                marqueeBar.classList.toggle('hidden', !displaySettings.layout.tickerVisible);
+            }
+            if (brand.logo) {
+                brandLogo.src = brand.logo;
+                brandLogo.alt = brand.profileName + ' logo';
+                brandLogo.classList.remove('hidden');
+                brandLogo.onerror = () => brandLogo.classList.add('hidden');
+            } else {
+                brandLogo.removeAttribute('src');
+                brandLogo.alt = '';
+                brandLogo.classList.add('hidden');
+            }
+            if (persist !== false) persistDisplaySettings(displaySettings);
+            renderWeather();
+        }
+
+        function isDisplayConnected() {
+            const mqttFresh = mqttControlConnected && mqttControlLastSeenTs && Date.now() - mqttControlLastSeenTs < 15000;
+            return Boolean(peerControlConnected || mqttFresh);
+        }
+
+        function clearDisplayStateAfterDisconnect() {
+            if (isDisplayConnected()) {
+                return;
+            }
+            updateConnectionBadge(false);
+            connectionText.textContent = 'Disconnected. Waiting for reconnect on PIN ' + pin + '.';
+            alertState.high_winds.active = false;
+            alertState.lightning.active = false;
+            alertState.memos = [];
+            alertState.content = { active: false, kind: null, payload: null, title: '', carouselActive: false, intervalSec: 8, items: [] };
+            lastInboundSeq = 0;
+            heartbeatRxTs = 0;
+            renderSignage();
+        }
+
+        function publishShowPresence(online) {
+            if (!mqttShowClient || !mqttShowClient.connected) {
+                return;
+            }
+            mqttShowClient.publish(
+                relayTopic(pin, 'show-presence'),
+                JSON.stringify({ online, timestamp: Date.now(), appVersion: APP_VERSION }),
+                { qos: 1, retain: true }
+            );
+        }
+
+        function startMqttShowRelay() {
+            if (!window.mqtt || typeof window.mqtt.connect !== 'function') {
+                setDiagnostics({ lastError: 'mqtt-library-unavailable' });
+                return;
+            }
+
+            if (mqttShowClient) {
+                try {
+                    mqttShowClient.end(true);
+                } catch (_) {
+                    // Ignore stale relay cleanup failures.
+                }
+            }
+
+            clearInterval(mqttPresenceTimer);
+            const showPresenceTopic = relayTopic(pin, 'show-presence');
+            const controlPresenceTopic = relayTopic(pin, 'control-presence');
+            const stateTopic = relayTopic(pin, 'state');
+            const clientId = 'wxstat-show-' + pin + '-' + Math.random().toString(36).slice(2, 10);
+
+            mqttShowClient = window.mqtt.connect(MQTT_BROKER_URL, {
+                clientId,
+                clean: true,
+                reconnectPeriod: 2000,
+                connectTimeout: 10000,
+                keepalive: 20,
+                will: {
+                    topic: showPresenceTopic,
+                    payload: JSON.stringify({ online: false, timestamp: Date.now(), appVersion: APP_VERSION }),
+                    qos: 1,
+                    retain: true
+                }
+            });
+
+            mqttShowClient.on('connect', () => {
+                mqttShowClient.subscribe(controlPresenceTopic, { qos: 1 });
+                publishShowPresence(true);
+                clearInterval(mqttPresenceTimer);
+                mqttPresenceTimer = setInterval(() => publishShowPresence(true), 4000);
+                setDiagnostics({ peerId: 'MQTT relay / PIN ' + pin, lastError: '' });
+            });
+
+            mqttShowClient.on('message', (topic, payloadBuffer) => {
+                try {
+                    const payload = JSON.parse(payloadBuffer.toString());
+                    if (topic === controlPresenceTopic) {
+                        if (payload.online && Date.now() - Number(payload.timestamp || 0) < 15000) {
+                            if (payload.sessionId && payload.sessionId !== lastInboundSender) {
+                                lastInboundSender = payload.sessionId;
+                                lastInboundSeq = 0;
+                            }
+                            mqttControlConnected = true;
+                            mqttControlLastSeenTs = Date.now();
+                            heartbeatRxTs = mqttControlLastSeenTs;
+                            mqttShowClient.subscribe(stateTopic, { qos: 1 });
+                            updateConnectionBadge(true);
+                            connectionText.textContent = 'Control link active via secure relay.';
+                            setDiagnostics({ peerId: 'MQTT relay / PIN ' + pin, heartbeat: '0s ago', lastError: '' });
+                            if (payload.appVersion && payload.appVersion !== APP_VERSION) {
+                                setDiagnostics({ lastError: 'build-mismatch: control ' + payload.appVersion });
+                            }
+                            renderSignage();
+                        } else {
+                            mqttControlConnected = false;
+                            mqttControlLastSeenTs = 0;
+                            mqttShowClient.unsubscribe(stateTopic);
+                            clearDisplayStateAfterDisconnect();
+                        }
+                        return;
+                    }
+
+                    if (topic === stateTopic) {
+                        if (!mqttControlConnected || Date.now() - Number(payload.timestamp || 0) > 30000) {
+                            return;
+                        }
+                        mqttControlConnected = true;
+                        mqttControlLastSeenTs = Date.now();
+                        heartbeatRxTs = mqttControlLastSeenTs;
+                        updateConnectionBadge(true);
+                        parseIncomingMessage(payload);
+                    }
+                } catch (_) {
+                    setDiagnostics({ lastError: 'invalid-relay-message' });
+                }
+            });
+
+            mqttShowClient.on('reconnect', () => {
+                setDiagnostics({ lastError: 'relay-reconnecting' });
+            });
+
+            mqttShowClient.on('error', (err) => {
+                setDiagnostics({ lastError: 'relay: ' + (err?.message || 'error') });
+            });
+        }
+
+        function setDiagnostics(update) {
+            if (update.lastError !== undefined) {
+                diagLastError.textContent = update.lastError || 'None';
+            }
+            if (update.attempt !== undefined) {
+                diagAttempt.textContent = String(update.attempt);
+            }
+            if (update.peerId !== undefined) {
+                diagPeerId.textContent = update.peerId || 'None';
+            }
+            if (update.heartbeat !== undefined) {
+                diagHeartbeat.textContent = update.heartbeat;
+            }
+        }
+
+        function startHeartbeatUiTicker() {
+            clearInterval(heartbeatUiTimer);
+            heartbeatUiTimer = setInterval(() => {
+                if (mqttControlConnected && Date.now() - mqttControlLastSeenTs >= 15000) {
+                    mqttControlConnected = false;
+                    mqttControlLastSeenTs = 0;
+                    clearDisplayStateAfterDisconnect();
+                }
+                if (peerControlConnected && heartbeatRxTs && Date.now() - heartbeatRxTs >= 15000) {
+                    peerControlConnected = false;
+                    heartbeatRxTs = 0;
+                    if (conn) {
+                        try { conn.close(); } catch(_) {}
+                        conn = null;
+                    }
+                    clearDisplayStateAfterDisconnect();
+                }
+                if (!isDisplayConnected()) {
+                    setDiagnostics({ heartbeat: 'Idle' });
+                    return;
+                }
+                if (!heartbeatRxTs) {
+                    setDiagnostics({ heartbeat: 'Waiting...' });
+                    return;
+                }
+                const ageSec = Math.max(0, Math.floor((Date.now() - heartbeatRxTs) / 1000));
+                setDiagnostics({ heartbeat: ageSec + 's ago' });
+            }, 1000);
+        }
+
+        function makeModernPeerId(pinCode) {
+            return 'wxstat-show-' + pinCode;
+        }
+
+        function makeLegacyPeerId(pinCode) {
+            return 'alex-dfw-show-' + pinCode;
+        }
+
+        function updateClocks() {
+            const now = new Date();
+            const utcTime = now.toLocaleTimeString('en-US', { timeZone: 'UTC', hour12: false });
+            const dfwTime = now.toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
+            clockUtc.textContent = utcTime;
+            clockDfw.textContent = dfwTime;
+        }
+
+        updateClocks();
+        setInterval(updateClocks, 1000);
+
+        async function fetchWeather() {
+            try {
+                const response = await fetch('https://api.weather.gov/stations/KDFW/observations/latest', {
+                    headers: { Accept: 'application/geo+json' },
+                    cache: 'no-store'
+                });
+                if (!response.ok) {
+                    throw new Error('weather_http_' + response.status);
+                }
+                const data = await response.json();
+
+                if (data && data.properties) {
+                    const p = data.properties;
+                    lastMetar = {
+                        temperatureC: Number(p.temperature?.value),
+                        dewpointC: Number(p.dewpoint?.value),
+                        humidityPct: Number(p.relativeHumidity?.value),
+                        windKph: Number(p.windSpeed?.value),
+                        windDirectionDeg: Number(p.windDirection?.value),
+                        windGustKph: Number(p.windGust?.value),
+                        visibilityM: Number(p.visibility?.value),
+                        pressurePa: Number(p.barometricPressure?.value),
+                        description: p.textDescription || 'Current observation',
+                        temperature_2m: Number(p.temperature?.value),
+                        relative_humidity_2m: Number(p.relativeHumidity?.value),
+                        wind_speed_10m: Number(p.windSpeed?.value) * 0.539957,
+                        wind_direction_10m: Number(p.windDirection?.value),
+                        text_description: p.textDescription || 'Current observation',
+                        timestamp: p.timestamp ? new Date(p.timestamp) : new Date()
+                    };
+                    localStorage.setItem('wxstat_weather_cache', JSON.stringify({ ...lastMetar, timestamp: lastMetar.timestamp.toISOString() }));
+                    renderWeather();
+                } else {
+                    throw new Error('weather_payload_invalid');
+                }
+            } catch (err) {
+                console.error('Weather fetch failed:', err);
+                metarStale = true;
+                metarBadge.textContent = 'WX: Cached';
+                metarBadge.classList.add('stale');
+                if (!lastMetar) {
+                    try {
+                        const cached = JSON.parse(localStorage.getItem('wxstat_weather_cache') || 'null');
+                        if (cached) {
+                            cached.timestamp = new Date(cached.timestamp);
+                            lastMetar = cached;
+                            renderWeather();
+                        } else {
+                            metarBadge.textContent = 'WX: Offline';
+                            metarContent.textContent = 'Weather data unavailable.';
+                        }
+                    } catch (_) {
+                        metarBadge.textContent = 'WX: Offline';
+                        metarContent.textContent = 'Weather data unavailable.';
+                    }
+                }
+            }
+        }
+
+        function getWeatherIconSvg(desc) {
+            const d = String(desc || '').toLowerCase();
+            let iconClass = 'clouds';
+            let iconSvg = '';
+
+            if (d.includes('thunder') || d.includes('lightning') || d.includes('storm')) {
+                iconClass = 'storm';
+                iconSvg = `
+                    <svg class="weather-icon-svg ${iconClass}" viewBox="0 0 64 64">
+                        <path d="M46 28a10 10 0 0 0-19.8-2A7.5 7.5 0 0 0 16 31.5 7.5 7.5 0 0 0 23.5 39h20A7.5 7.5 0 0 0 51 31.5 7.5 7.5 0 0 0 46 28z" fill="#788b9e" />
+                        <polygon class="lightning-flash" points="32,36 24,47 31,47 26,57 39,44 31,44" fill="#ffd43f" />
+                    </svg>
+                `;
+            } else if (d.includes('rain') || d.includes('drizzle') || d.includes('shower') || d.includes('precipitation')) {
+                iconClass = 'rain';
+                iconSvg = `
+                    <svg class="weather-icon-svg ${iconClass}" viewBox="0 0 64 64">
+                        <path d="M46 32a10 10 0 0 0-19.8-2A7.5 7.5 0 0 0 16 35.5 7.5 7.5 0 0 0 23.5 43h20A7.5 7.5 0 0 0 51 35.5 7.5 7.5 0 0 0 46 32z" fill="#7ba2c5" />
+                        <line class="rain-drop drop-1" x1="24" y1="46" x2="20" y2="53" stroke="#4da2ff" stroke-width="2" stroke-linecap="round" />
+                        <line class="rain-drop drop-2" x1="32" y1="48" x2="28" y2="55" stroke="#4da2ff" stroke-width="2" stroke-linecap="round" />
+                        <line class="rain-drop drop-3" x1="40" y1="46" x2="36" y2="53" stroke="#4da2ff" stroke-width="2" stroke-linecap="round" />
+                    </svg>
+                `;
+            } else if (d.includes('snow') || d.includes('ice') || d.includes('freezing') || d.includes('sleet') || d.includes('hail')) {
+                iconClass = 'snow';
+                iconSvg = `
+                    <svg class="weather-icon-svg ${iconClass}" viewBox="0 0 64 64">
+                        <path d="M46 32a10 10 0 0 0-19.8-2A7.5 7.5 0 0 0 16 35.5 7.5 7.5 0 0 0 23.5 43h20A7.5 7.5 0 0 0 51 35.5 7.5 7.5 0 0 0 46 32z" fill="#a5c6e8" />
+                        <circle cx="24" cy="48" r="2" fill="#fff" class="snow-flake" style="animation: weather-rain 2s linear infinite;" />
+                        <circle cx="32" cy="50" r="2" fill="#fff" class="snow-flake" style="animation: weather-rain 1.8s linear infinite; animation-delay: 0.6s;" />
+                        <circle cx="40" cy="48" r="2" fill="#fff" class="snow-flake" style="animation: weather-rain 2.2s linear infinite; animation-delay: 1.2s;" />
+                    </svg>
+                `;
+            } else if (d.includes('wind') || d.includes('breeze') || d.includes('gale') || d.includes('squall')) {
+                iconClass = 'wind';
+                iconSvg = `
+                    <svg class="weather-icon-svg ${iconClass}" viewBox="0 0 64 64">
+                        <path d="M46 32a10 10 0 0 0-19.8-2A7.5 7.5 0 0 0 16 35.5 7.5 7.5 0 0 0 23.5 43h20A7.5 7.5 0 0 0 51 35.5 7.5 7.5 0 0 0 46 32z" fill="#7ba2c5" opacity="0.7" />
+                        <line x1="20" y1="46" x2="44" y2="46" stroke="#d5e6f5" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="8 4" style="animation: weather-spin 4s linear infinite;" />
+                        <line x1="16" y1="50" x2="36" y2="50" stroke="#d5e6f5" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 3" style="animation: weather-spin 5s linear infinite; animation-delay: 0.5s;" />
+                    </svg>
+                `;
+            } else if (d.includes('clear') || d.includes('fair') || d.includes('sunny')) {
+                iconClass = 'sun';
+                iconSvg = `
+                    <svg class="weather-icon-svg ${iconClass}" viewBox="0 0 64 64">
+                        <circle cx="32" cy="32" r="13" fill="#ffb400" />
+                        <g class="sun-rays" stroke="#ffb400" stroke-width="3" stroke-linecap="round">
+                            <line x1="32" y1="12" x2="32" y2="4" />
+                            <line x1="32" y1="52" x2="32" y2="60" />
+                            <line x1="12" y1="32" x2="4" y2="32" />
+                            <line x1="52" y1="32" x2="60" y2="32" />
+                            <line x1="18" y1="18" x2="12" y2="12" />
+                            <line x1="46" y1="46" x2="52" y2="52" />
+                            <line x1="46" y1="18" x2="52" y2="12" />
+                            <line x1="18" y1="46" x2="12" y2="52" />
+                        </g>
+                    </svg>
+                `;
+            } else {
+                iconClass = 'clouds';
+                iconSvg = `
+                    <svg class="weather-icon-svg ${iconClass}" viewBox="0 0 64 64">
+                        <path d="M22 26 A6 6 0 0 1 34 26" fill="none" stroke="#ffaa00" stroke-width="2.5" />
+                        <path d="M46 32a10 10 0 0 0-19.8-2A7.5 7.5 0 0 0 16 35.5 7.5 7.5 0 0 0 23.5 43h20A7.5 7.5 0 0 0 51 35.5 7.5 7.5 0 0 0 46 32z" fill="#7ba2c5" />
+                        <path d="M42 38a8 8 0 0 0-15.8-1.6A6 6 0 0 0 18 41 6 6 0 0 0 24 47h18a6 6 0 0 0 6-6 6 6 0 0 0-6-6z" fill="#9cbcd9" opacity="0.8" transform="translate(-4, 2) scale(0.95)" />
+                    </svg>
+                `;
+            }
+            return iconSvg;
+        }
+
+         function getWindCompassSvg(dir, speed, gust, units) {
+            const direction = Number.isFinite(dir) ? dir : 0;
+            const windSpeed = Number.isFinite(speed) ? speed : 0;
+            const gustSpeed = Number.isFinite(gust) ? gust : 0;
+
+            const isWarn = windSpeed >= 25 && windSpeed <= 30;
+            const isDanger = windSpeed > 30;
+
+            function polarToCart(cx, cy, r, angleDeg) {
+                const angleRad = (angleDeg - 90) * Math.PI / 180.0;
+                return {
+                    x: cx + r * Math.cos(angleRad),
+                    y: cy + r * Math.sin(angleRad)
+                };
+            }
+
+            function getArcD(cx, cy, r, startDeg, endDeg) {
+                const start = polarToCart(cx, cy, r, endDeg);
+                const end = polarToCart(cx, cy, r, startDeg);
+                const largeArc = endDeg - startDeg <= 180 ? 0 : 1;
+                return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
+            }
+
+            // Green segment: 0 to 220 deg, Amber: 225 to 270 deg, Red: 275 to 360 deg
+            const greenArc = getArcD(50, 50, 42, 0, 220);
+            const amberArc = getArcD(50, 50, 42, 225, 270);
+            const redArc = getArcD(50, 50, 42, 275, 360);
+
+            let needleColor = 'var(--brand-accent)';
+            let needleGlow = '';
+            if (isWarn) {
+                needleColor = '#eab308';
+                needleGlow = 'drop-shadow(0 0 4px #eab308)';
+            } else if (isDanger) {
+                needleColor = '#ef4444';
+                needleGlow = 'drop-shadow(0 0 6px #ef4444)';
+            }
+
+            return `
+                <div class="compass-container">
+                    <svg class="compass-svg" viewBox="0 0 100 100">
+                        <circle cx="50" cy="50" r="47" fill="rgba(8, 14, 22, 0.45)" stroke="rgba(255,255,255,0.05)" stroke-width="1" />
+                        
+                        <!-- Range Limit Arcs -->
+                        <path d="${greenArc}" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" opacity="0.4" />
+                        <path d="${amberArc}" fill="none" stroke="#eab308" stroke-width="4.5" stroke-linecap="round" 
+                              class="${isWarn ? 'compass-pulse-warn' : ''}" opacity="${isWarn ? 1.0 : 0.4}" />
+                        <path d="${redArc}" fill="none" stroke="#ef4444" stroke-width="4.5" stroke-linecap="round" 
+                              class="${isDanger ? 'compass-flash-danger' : ''}" opacity="${isDanger ? 1.0 : 0.4}" />
+                        
+                        <!-- Direction Labels -->
+                        <text x="50" y="14" fill="#ffffff" font-size="8" font-weight="900" text-anchor="middle" opacity="0.9">N</text>
+                        <text x="50" y="93" fill="var(--text-3)" font-size="7" font-weight="800" text-anchor="middle" opacity="0.6">S</text>
+                        <text x="90" y="52.5" fill="var(--text-3)" font-size="7" font-weight="800" text-anchor="middle" opacity="0.6">E</text>
+                        <text x="10" y="52.5" fill="var(--text-3)" font-size="7" font-weight="800" text-anchor="middle" opacity="0.6">W</text>
+                        
+                        <!-- Pointer Group -->
+                        <g transform="rotate(${direction}, 50, 50)" style="transition: transform 0.5s cubic-bezier(0.25, 0.8, 0.25, 1); filter: ${needleGlow};">
+                            <polygon points="50,6 45,21 50,18 55,21" fill="${needleColor}" />
+                            <line x1="50" y1="18" x2="50" y2="35" stroke="${needleColor}" stroke-width="1.5" stroke-dasharray="1.5,1.5" opacity="0.7" />
+                        </g>
+                        
+                        <!-- Center Pin -->
+                        <circle cx="50" cy="50" r="1.5" fill="#ffffff" />
+                    </svg>
+                </div>
+            `;
+        }
+
+        function parseRichCardBody(bodyText, messageTimestamp) {
+            let text = String(bodyText || '').trim();
+
+            // 1. First escape the raw body to prevent HTML injection
+            const escapeDiv = document.createElement('div');
+            escapeDiv.textContent = text;
+            let html = escapeDiv.innerHTML;
+
+            // 2. Parse Flight Status Boards (FIDS)
+            if (text.startsWith('FIDS BOARD:')) {
+                const lines = text.split('\n');
+                let tableHtml = `<table class="fids-table">`;
+                let hasHeader = false;
+                lines.forEach((line) => {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine.startsWith('|') || !trimmedLine.endsWith('|') || trimmedLine.includes('---')) {
+                        return;
+                    }
+                    const cells = trimmedLine.slice(1, -1).split('|').map(c => {
+                        const cellDiv = document.createElement('div');
+                        cellDiv.textContent = c.trim();
+                        return cellDiv.innerHTML;
+                    });
+                    if (!hasHeader) {
+                        tableHtml += '<thead><tr>' + cells.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+                        hasHeader = true;
+                    } else {
+                        tableHtml += '<tr>' + cells.map((c, i) => {
+                            const cUpper = c.toUpperCase();
+                            let statusAttr = '';
+                            if (cUpper === 'ON TIME' || cUpper === 'BOARDING' || cUpper === 'DEPARTED' || cUpper === 'ARRIVED') {
+                                statusAttr = ' data-status="OK"';
+                            } else if (cUpper === 'DELAYED' || cUpper === 'LATE' || cUpper === 'HELD' || cUpper === 'DELAY') {
+                                statusAttr = ' data-status="WARN"';
+                            } else if (cUpper === 'CANCELLED' || cUpper === 'DIVERTED') {
+                                statusAttr = ' data-status="DANGER"';
+                            }
+                            return `<td${statusAttr}>${c}</td>`;
+                        }).join('') + '</tr>';
+                    }
+                });
+                tableHtml += `</tbody></table>`;
+                return tableHtml;
+            }
+
+            // 3. Parse Checkboxes / Checklist
+            if (text.includes('- [ ]') || text.includes('- [x]') || text.includes('- [X]')) {
+                const lines = text.split('\n');
+                let total = 0;
+                let checked = 0;
+                let listHtml = `<ul class="checklist-items">`;
+                lines.forEach((line) => {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('- [ ]') || trimmed.toLowerCase().startsWith('- [x]')) {
+                        total++;
+                        const isDone = trimmed.toLowerCase().startsWith('- [x]');
+                        if (isDone) checked++;
+                        const content = trimmed.substring(5).trim();
+                        // Escape content
+                        const contentDiv = document.createElement('div');
+                        contentDiv.textContent = content;
+                        const escapedContent = contentDiv.innerHTML;
+
+                        const checkIcon = isDone 
+                            ? `<span class="chk-box checked"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span>`
+                            : `<span class="chk-box unchecked"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle></svg></span>`;
+                        listHtml += `<li class="checklist-item ${isDone ? 'done' : ''}">${checkIcon}<span class="check-text">${escapedContent}</span></li>`;
+                    } else {
+                        // Escape non-checkbox lines
+                        const nonItemDiv = document.createElement('div');
+                        nonItemDiv.textContent = line;
+                        listHtml += `<li class="checklist-non-item">${nonItemDiv.innerHTML}</li>`;
+                    }
+                });
+                listHtml += `</ul>`;
+                const progressPct = total > 0 ? Math.round((checked / total) * 100) : 0;
+                const progressRing = `
+                    <div class="checklist-progress-container">
+                        <div class="checklist-progress-bar-wrap">
+                            <div class="checklist-progress-bar" style="width: ${progressPct}%"></div>
+                        </div>
+                        <div class="checklist-progress-label">${checked}/${total} (${progressPct}%)</div>
+                    </div>
+                `;
+                return progressRing + listHtml;
+            }
+
+            // 4. Replace PCA shortcodes in already-escaped HTML
+            if (html.includes('[pca:airbus-warn]')) {
+                html = html.replace('[pca:airbus-warn]', `
+                    <div class="pca-show-advisory pca-show-warn">
+                        <div class="pca-title">⚠️ PCA Safety Advisory</div>
+                        <div class="pca-desc"><strong>Airbus:</strong> REMOVE PCA Hose<br><strong>Boeing:</strong> OK (Keep connected)</div>
+                    </div>
+                `);
+            } else if (html.includes('[pca:all-danger]')) {
+                html = html.replace('[pca:all-danger]', `
+                    <div class="pca-show-advisory pca-show-danger">
+                        <div class="pca-title">🚨 Critical PCA Hazard</div>
+                        <div class="pca-desc"><strong>All Aircraft (Airbus &amp; Boeing):</strong><br>REMOVE PCA Hoses Immediately!</div>
+                    </div>
+                `);
+            }
+
+            // 5. Replace Countdown Timers in already-escaped HTML
+            html = html.replace(/\[countdown:([^\]]+)\]/gi, (match, val) => {
+                let targetTime = 0;
+                const trimmedVal = val.trim();
+                if (/^\d+$/.test(trimmedVal)) {
+                    const durationSec = parseInt(trimmedVal, 10);
+                    const msgTime = messageTimestamp ? Number(messageTimestamp) : Date.now();
+                    targetTime = msgTime + (durationSec * 1000);
+                } else {
+                    const decodedVal = trimmedVal.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+                    targetTime = Date.parse(decodedVal) || Date.parse(trimmedVal) || 0;
+                }
+                return `<div class="card-countdown-timer" data-target="${targetTime}">--:--</div>`;
+            });
+
+            return html.replace(/\n/g, '<br>');
+        }
+
+        let weatherRadarActive = false;
+        window.toggleWeatherRadar = function() {
+            weatherRadarActive = !weatherRadarActive;
+            renderWeather();
+        };
+
+        let activeIdleViewIndex = 0;
+        let idleRotationTimer = null;
+
+        function startIdleRotationTimer() {
+            if (idleRotationTimer) return;
+            idleRotationTimer = setInterval(() => {
+                const cockpit = document.getElementById('status-weather-cockpit');
+                if (cockpit) {
+                    cockpit.classList.add('fade-out');
+                    setTimeout(() => {
+                        activeIdleViewIndex = (activeIdleViewIndex + 1) % 3;
+                        renderWeather();
+                        cockpit.classList.remove('fade-out');
+                    }, 250);
+                } else {
+                    activeIdleViewIndex = (activeIdleViewIndex + 1) % 3;
+                }
+            }, 30000);
+        }
+
+        function stopIdleRotationTimer() {
+            if (idleRotationTimer) {
+                clearInterval(idleRotationTimer);
+                idleRotationTimer = null;
+            }
+        }
+
+        function renderWeather() {
+            if (!lastMetar) { metarContent.textContent = 'No weather data.'; return; }
+            const m = lastMetar;
+            const config = displaySettings.weather;
+            const timestamp = m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp);
+            const time = Number.isNaN(timestamp.getTime()) ? 'N/A' : timestamp.toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false, hour: '2-digit', minute: '2-digit' });
+            const ageMs = Number.isNaN(timestamp.getTime()) ? Infinity : Date.now() - timestamp.getTime();
+            metarStale = ageMs > config.staleMinutes * 60000;
+            metarBadge.textContent = metarStale ? 'WX: Stale' : 'WX: Fresh';
+            metarBadge.classList.toggle('stale', metarStale);
+
+            const precision = config.precision;
+            const abbreviate = config.abbreviations;
+            const tempC = Number.isFinite(m.temperatureC) ? m.temperatureC : Number(m.temperature_2m);
+            const dewC = Number(m.dewpointC);
+            const humidity = Number.isFinite(m.humidityPct) ? m.humidityPct : Number(m.relative_humidity_2m);
+            const windKph = Number.isFinite(m.windKph) ? m.windKph : Number(m.wind_speed_10m) / 0.539957;
+            const gustKph = Number(m.windGustKph);
+            const direction = Number.isFinite(m.windDirectionDeg) ? m.windDirectionDeg : Number(m.wind_direction_10m);
+            const visibilityM = Number(m.visibilityM);
+            const pressurePa = Number(m.pressurePa);
+            const fmt = (value, digits) => Number.isFinite(value) ? value.toFixed(digits) : 'N/A';
+
+            let speedVal = 0;
+            let gustVal = 0;
+            let unitLabel = 'KT';
+            if (config.units === 'metric') {
+                speedVal = windKph;
+                gustVal = gustKph;
+                unitLabel = 'km/h';
+            } else if (config.units === 'imperial') {
+                speedVal = windKph * 0.621371;
+                gustVal = gustKph * 0.621371;
+                unitLabel = 'mph';
+            } else {
+                speedVal = windKph * 0.539957;
+                gustVal = gustKph * 0.539957;
+                unitLabel = 'KT';
+            }
+
+            const values = {
+                time: (abbreviate ? 'OBS ' : 'Observed ') + time,
+                description: m.description || m.text_description || 'Current observation',
+                humidity: (abbreviate ? 'RH ' : 'Humidity ') + fmt(humidity, 0) + '%'
+            };
+
+            if (config.units === 'metric') {
+                values.temperature = (abbreviate ? 'T ' : 'Temperature ') + fmt(tempC, precision) + '°C';
+                values.dewpoint = (abbreviate ? 'DP ' : 'Dew Point ') + fmt(dewC, precision) + '°C';
+                values.wind = (abbreviate ? 'WND ' : 'Wind ') + fmt(direction, 0) + '° @ ' + fmt(windKph, precision) + ' km/h';
+                values.gust = (abbreviate ? 'GST ' : 'Gust ') + fmt(gustKph, precision) + ' km/h';
+                values.visibility = (abbreviate ? 'VIS ' : 'Visibility ') + fmt(visibilityM / 1000, precision) + ' km';
+                values.pressure = (abbreviate ? 'PRES ' : 'Pressure ') + fmt(pressurePa / 100, precision) + ' hPa';
+            } else if (config.units === 'imperial') {
+                values.temperature = (abbreviate ? 'T ' : 'Temperature ') + fmt(tempC * 9 / 5 + 32, precision) + '°F';
+                values.dewpoint = (abbreviate ? 'DP ' : 'Dew Point ') + fmt(dewC * 9 / 5 + 32, precision) + '°F';
+                values.wind = (abbreviate ? 'WND ' : 'Wind ') + fmt(direction, 0) + '° @ ' + fmt(windKph * 0.621371, precision) + ' mph';
+                values.gust = (abbreviate ? 'GST ' : 'Gust ') + fmt(gustKph * 0.621371, precision) + ' mph';
+                values.visibility = (abbreviate ? 'VIS ' : 'Visibility ') + fmt(visibilityM / 1609.344, precision) + ' mi';
+                values.pressure = (abbreviate ? 'ALT ' : 'Pressure ') + fmt(pressurePa * 0.0002953, 2) + ' inHg';
+            } else {
+                values.temperature = (abbreviate ? 'T ' : 'Temperature ') + fmt(tempC, precision) + '°C/' + fmt(tempC * 9 / 5 + 32, precision) + '°F';
+                values.dewpoint = (abbreviate ? 'DP ' : 'Dew Point ') + fmt(dewC, precision) + '°C';
+                values.wind = (abbreviate ? 'WND ' : 'Wind ') + fmt(direction, 0) + '° @ ' + fmt(windKph * 0.539957, precision) + 'KT';
+                values.gust = (abbreviate ? 'GST ' : 'Gust ') + fmt(gustKph * 0.539957, precision) + 'KT';
+                values.visibility = (abbreviate ? 'VIS ' : 'Visibility ') + fmt(visibilityM / 1609.344, precision) + 'SM';
+                values.pressure = (abbreviate ? 'ALT ' : 'Altimeter ') + fmt(pressurePa * 0.0002953, 2);
+            }
+            const activeSlot = displaySettings.layout.weatherSlot;
+            const isExpanded = config.layout === 'expanded' || activeSlot === 'side';
+
+            let windHtml = `No Wind Data`;
+            if (Number.isFinite(direction)) {
+                windHtml = `
+                    <div class="weather-dash-val">${fmt(direction, 0)}° @ ${fmt(speedVal, 0)} ${unitLabel}</div>
+                    <div class="weather-dash-sub">${Number.isFinite(gustVal) && gustVal > 0 ? 'Gusts to ' + fmt(gustVal, 0) + ' ' + unitLabel : 'No Gusts'}</div>
+                `;
+            }
+
+            let tempLabel = config.units === 'metric' ? `${fmt(tempC, precision)}°C` : config.units === 'imperial' ? `${fmt(tempC * 9/5 + 32, precision)}°F` : `${fmt(tempC, precision)}°C / ${fmt(tempC * 9/5 + 32, precision)}°F`;
+            let visLabel = config.units === 'metric' ? `${fmt(visibilityM / 1000, precision)} km` : `${fmt(visibilityM / 1609.344, precision)} SM`;
+            let presLabel = config.units === 'metric' ? `${fmt(pressurePa / 100, precision)} hPa` : `${fmt(pressurePa * 0.0002953, 2)} inHg`;
+
+            let conditionBodyHtml = '';
+            if (weatherRadarActive) {
+                conditionBodyHtml = `
+                    <div class="radar-map-wrapper" style="position:absolute; inset:2px; overflow:hidden; border-radius:14px; z-index:5;">
+                        <img src="https://radar.weather.gov/ridge/standard/KDFW_loop.gif" 
+                             style="width:100%; height:100%; object-fit:cover; filter:brightness(0.85) contrast(1.15);" 
+                             alt="KDFW NOAA Radar Loop" />
+                        <div style="position:absolute; bottom:6px; right:8px; background:rgba(8,14,22,0.85); color:#ffcb05; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:900; letter-spacing:0.05em; border:1.2px solid rgba(255,255,255,0.1);">LIVE RADAR</div>
+                    </div>
+                `;
+            } else {
+                conditionBodyHtml = `
+                    <div class="weather-dash-icon-wrap" style="width:72px; height:72px;">${getWeatherIconSvg(values.description)}</div>
+                    <div class="weather-dash-details" style="text-align:left;">
+                        <div class="weather-dash-label" style="font-size:0.95rem; text-transform:uppercase; color:var(--text-2); font-weight:800;">Condition</div>
+                        <div class="weather-dash-val" style="font-size:1.85rem; font-weight:900; color:#ffffff;" title="${values.description}">${values.description}</div>
+                        <div class="weather-dash-sub" style="font-size:0.85rem; color:var(--text-3); font-weight:700;">DFW Obs ${time} (Tap for Radar)</div>
+                    </div>
+                `;
+            }
+
+            // Calculations for detailed Weather Cockpit
+            const tempF = tempC * 9 / 5 + 32;
+            const windMph = windKph * 0.621371;
+            let feelsLikeF = tempF;
+            if (tempF >= 80) {
+                feelsLikeF = 0.5 * (tempF + 61.0 + ((tempF - 68.0) * 1.2) + (humidity * 0.094));
+            } else if (tempF <= 50 && windMph >= 3) {
+                feelsLikeF = 35.74 + 0.6215 * tempF - 35.75 * Math.pow(windMph, 0.16) + 0.4275 * tempF * Math.pow(windMph, 0.16);
+            }
+            const feelsLikeC = (feelsLikeF - 32) * 5 / 9;
+
+            const altimeterInHg = pressurePa * 0.0002953;
+            const pressureHpa = pressurePa / 100;
+            const pressureAlt = Math.round((29.92 - altimeterInHg) * 1000 + 607);
+            const standardTempC = 15 - (pressureAlt / 1000) * 1.98;
+            const densityAlt = Math.round(pressureAlt + (120 * (tempC - standardTempC)));
+
+            const spread = tempC - dewC;
+            const cloudBaseAgf = spread > 0 ? Math.round((spread / 2.5) * 1000) : 0;
+
+            let headwindVal = 0;
+            let crosswindVal = 0;
+            if (Number.isFinite(direction)) {
+                const angleRad = (direction - 172) * Math.PI / 180;
+                headwindVal = speedVal * Math.cos(angleRad);
+                crosswindVal = speedVal * Math.sin(angleRad);
+            }
+
+            // Detailed HTML Blocks
+            // Detailed HTML Blocks
+            const feelsLikeLabel = config.units === 'metric' ? `${fmt(feelsLikeC, precision)}°C` : config.units === 'imperial' ? `${fmt(feelsLikeF, precision)}°F` : `${fmt(feelsLikeC, precision)}°C / ${fmt(feelsLikeF, precision)}°F`;
+            const tempDetailHtml = `
+                <div class="weather-dash-details" style="text-align:left; width:100%;">
+                    <div class="weather-dash-label">Temperature</div>
+                    <div class="weather-dash-val">${tempLabel}</div>
+                    <div style="margin-top: clamp(8px, 1.5vh, 18px); display:grid; gap:clamp(4px, 0.8vh, 12px);" class="weather-dash-tile-detail-text">
+                        <div>Feels Like: <span class="weather-dash-tile-detail-highlight">${feelsLikeLabel}</span></div>
+                        <div>Relative Humidity: <span class="weather-dash-tile-detail-highlight">${fmt(humidity, 0)}%</span></div>
+                        <div>Dew Point: <span class="weather-dash-tile-detail-highlight">${fmt(dewC, 0)}°C (${fmt(dewC*9/5+32, 0)}°F)</span></div>
+                    </div>
+                </div>
+            `;
+
+            const runwayHeadwindLabel = fmt(Math.abs(headwindVal), 1);
+            const headwindDirStr = headwindVal >= 0 ? 'Headwind' : 'Tailwind';
+            const crosswindLabel = fmt(Math.abs(crosswindVal), 1);
+            const windDetailHtml = `
+                ${getWindCompassSvg(direction, speedVal, gustVal, unitLabel)}
+                <div class="weather-dash-details" style="text-align:left; flex:1;">
+                    <div class="weather-dash-label">Wind &amp; Runway</div>
+                    <div class="weather-dash-val">${fmt(direction, 0)}° @ ${fmt(speedVal, 0)} ${unitLabel}</div>
+                    <div style="margin-top: clamp(8px, 1.5vh, 18px); display:grid; gap:clamp(4px, 0.8vh, 12px);" class="weather-dash-tile-detail-text">
+                        <div>Gusts: <span class="weather-dash-tile-detail-highlight">${Number.isFinite(gustVal) && gustVal > 0 ? fmt(gustVal, 0) + ' ' + unitLabel : 'None'}</span></div>
+                        <div>Rwy 17 Headwind: <span class="weather-dash-tile-detail-highlight">${runwayHeadwindLabel} ${unitLabel} ${headwindDirStr}</span></div>
+                        <div>Rwy 17 Crosswind: <span class="weather-dash-tile-detail-highlight">${crosswindLabel} ${unitLabel}</span></div>
+                    </div>
+                </div>
+            `;
+
+            const pressDetailHtml = `
+                <div class="weather-dash-details" style="text-align:left; width:100%;">
+                    <div class="weather-dash-label">Altimeter &amp; Pressure</div>
+                    <div class="weather-dash-val">${presLabel}</div>
+                    <div style="margin-top: clamp(8px, 1.5vh, 18px); display:grid; gap:clamp(4px, 0.8vh, 12px);" class="weather-dash-tile-detail-text">
+                        <div>Baro Pressure: <span class="weather-dash-tile-detail-highlight">${fmt(pressureHpa, 1)} hPa</span></div>
+                        <div>Pressure Altitude: <span class="weather-dash-tile-detail-highlight">${pressureAlt.toLocaleString()} ft</span></div>
+                        <div>Density Altitude: <span class="weather-dash-tile-detail-highlight">${densityAlt.toLocaleString()} ft</span></div>
+                    </div>
+                </div>
+            `;
+
+            const cloudBaseStr = cloudBaseAgf > 0 ? `${cloudBaseAgf.toLocaleString()} ft AGL` : 'Clear / Ceiling Unlimited';
+            const physicsDetailHtml = `
+                <div class="weather-dash-details" style="text-align:left; width:100%;">
+                    <div class="weather-dash-label">Aviation &amp; Atmosphere</div>
+                    <div class="weather-dash-val">VIS ${visLabel}</div>
+                    <div style="margin-top: clamp(8px, 1.5vh, 18px); display:grid; gap:clamp(4px, 0.8vh, 12px);" class="weather-dash-tile-detail-text">
+                        <div>Est. Cloud Base: <span class="weather-dash-tile-detail-highlight">${cloudBaseStr}</span></div>
+                        <div>Temp-Dewpoint Spread: <span class="weather-dash-tile-detail-highlight">${fmt(spread, 1)}°C (${fmt(spread*9/5, 1)}°F)</span></div>
+                        <div>Elevation: <span class="weather-dash-tile-detail-highlight">545-607 ft MSL (DFW)</span></div>
+                    </div>
+                </div>
+            `;
+
+            let pcaStatusLabel = 'NORMAL';
+            let pcaStatusBg = 'rgba(34,197,94,0.12)';
+            let pcaStatusBorder = 'rgba(34,197,94,0.45)';
+            let pcaStatusText = '#22c55e';
+            let pcaStatusDesc = 'All aircraft operations normal. PCA hoses may remain connected.';
+            let pcaPulseAnim = 'none';
+
+            const ktSpeed = windKph * 0.539957;
+            if (ktSpeed >= 31) {
+                pcaStatusLabel = 'RED ALERT - DISCONNECT ALL';
+                pcaStatusBg = 'rgba(239,68,68,0.15)';
+                pcaStatusBorder = 'rgba(239,68,68,0.6)';
+                pcaStatusText = '#ef4444';
+                pcaStatusDesc = 'CRITICAL WINDS (31+ KTS). Boeing & Airbus aircraft must REMOVE PCA immediately!';
+                pcaPulseAnim = 'pca-show-pulse-danger 2s infinite alternate';
+            } else if (ktSpeed >= 25) {
+                pcaStatusLabel = 'CAUTION - AIRBUS LIMIT';
+                pcaStatusBg = 'rgba(245,158,11,0.15)';
+                pcaStatusBorder = 'rgba(245,158,11,0.6)';
+                pcaStatusText = '#f59e0b';
+                pcaStatusDesc = 'HIGH WINDS (25-30 KTS). Airbus aircraft must REMOVE PCA. Boeing aircraft can keep PCA.';
+                pcaPulseAnim = 'pca-show-pulse-warn 2s infinite alternate';
+            }
+
+            const pcaDetailHtml = `
+                <div class="weather-dash-details" style="text-align:left; width:100%; display:flex; flex-direction:column; height:100%;">
+                    <div class="weather-dash-label">PCA Safety Advisory</div>
+                    <div style="background:${pcaStatusBg}; border:2.5px solid ${pcaStatusBorder}; padding:8px 16px; border-radius:10px; display:inline-block; font-size:clamp(0.95rem, 1.8vh, 1.55rem); font-weight:900; color:${pcaStatusText}; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:12px; width:fit-content; animation:${pcaPulseAnim};">
+                        ${pcaStatusLabel}
+                    </div>
+                    <div style="font-size:clamp(0.95rem, 1.7vh, 1.55rem); font-weight:700; color:var(--text-3); line-height:1.45; flex:1;">
+                        ${pcaStatusDesc}
+                    </div>
+                    <div style="margin-top:8px; font-size:clamp(0.85rem, 1.5vh, 1.3rem); font-weight:800; color:var(--text-3); text-transform:uppercase; opacity:0.8;">
+                        Limits: Airbus 25 KTS | Boeing 31 KTS
+                    </div>
+                </div>
+            `;
+
+            const dfwClockDetailHtml = `
+                <div class="weather-dash-details" style="text-align:left; width:100%;">
+                    <div class="weather-dash-label">DFW Local Time</div>
+                    <div class="weather-dash-val" id="idle-clock-dfw" style="font-family: monospace; font-size: clamp(2.5rem, 5.5vh, 6.5rem) !important; color: #ffcb05 !important; text-shadow: 0 0 10px rgba(255, 203, 5, 0.3); font-weight:900; line-height:1.15;">--:--:--</div>
+                    <div class="weather-dash-sub" style="font-size: clamp(0.95rem, 1.8vh, 1.5rem) !important; color: var(--text-3); font-weight: 700;">Airport Reference Time</div>
+                </div>
+            `;
+
+            const utcClockDetailHtml = `
+                <div class="weather-dash-details" style="text-align:left; width:100%;">
+                    <div class="weather-dash-label">Zulu Time (UTC)</div>
+                    <div class="weather-dash-val" id="idle-clock-utc" style="font-family: monospace; font-size: clamp(2.5rem, 5.5vh, 6.5rem) !important; color: #2f9bff !important; text-shadow: 0 0 10px rgba(47, 155, 255, 0.3); font-weight:900; line-height:1.15;">--:--:--</div>
+                    <div class="weather-dash-sub" style="font-size: clamp(0.95rem, 1.8vh, 1.5rem) !important; color: var(--text-3); font-weight: 700;">Aviation Standard Time</div>
+                </div>
+            `;
+
+            // Cockpit 8-tile grid layout HTML
+            const cockpitGridHtml = `
+                <div class="weather-dashboard-grid">
+                    <div class="weather-dash-tile" style="min-height: 140px; display: flex; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: clamp(16px, 2vw, 24px); border-radius: 16px;">
+                        ${dfwClockDetailHtml}
+                    </div>
+                    <div class="weather-dash-tile" style="min-height: 140px; display: flex; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: clamp(16px, 2vw, 24px); border-radius: 16px;">
+                        ${utcClockDetailHtml}
+                    </div>
+                    <div class="weather-dash-tile" onclick="toggleWeatherRadar()" style="cursor: pointer; position: relative; min-height: 140px; display: flex; align-items: center; gap: 14px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: clamp(16px, 2vw, 24px); border-radius: 16px;">
+                        ${conditionBodyHtml}
+                    </div>
+                    <div class="weather-dash-tile" style="min-height: 140px; display: flex; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: clamp(16px, 2vw, 24px); border-radius: 16px;">
+                        ${tempDetailHtml}
+                    </div>
+                    <div class="weather-dash-tile" style="min-height: 140px; display: flex; align-items: center; gap: 14px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: clamp(16px, 2vw, 24px); border-radius: 16px;">
+                        ${windDetailHtml}
+                    </div>
+                    <div class="weather-dash-tile" style="min-height: 140px; display: flex; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: clamp(16px, 2vw, 24px); border-radius: 16px;">
+                        ${pressDetailHtml}
+                    </div>
+                    <div class="weather-dash-tile" style="min-height: 140px; display: flex; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: clamp(16px, 2vw, 24px); border-radius: 16px;">
+                        ${physicsDetailHtml}
+                    </div>
+                    <div class="weather-dash-tile" style="min-height: 140px; display: flex; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); padding: clamp(16px, 2vw, 24px); border-radius: 16px;">
+                        ${pcaDetailHtml}
+                    </div>
+                </div>
+            `;
+
+            // Standard Footer 4-tile grid layout HTML (original layout)
+            const footerGridHtml = `
+                <div class="weather-dashboard-grid">
+                    <div class="weather-dash-tile" onclick="toggleWeatherRadar()" style="cursor: pointer; position: relative; min-height: 100px;">
+                        <div class="weather-dash-icon-wrap" style="width:52px; height:52px;">${getWeatherIconSvg(values.description)}</div>
+                        <div class="weather-dash-details" style="text-align:left;">
+                            <div class="weather-dash-label">Condition (Tap for Radar)</div>
+                            <div class="weather-dash-val" style="font-size:1.45rem;" title="${values.description}">${values.description}</div>
+                            <div class="weather-dash-sub">KDFW OBS ${time}</div>
+                        </div>
+                    </div>
+                    <div class="weather-dash-tile">
+                        <div class="weather-dash-details">
+                            <div class="weather-dash-label">Temperature</div>
+                            <div class="weather-dash-val" style="font-size:1.45rem;">${tempLabel}</div>
+                            <div class="weather-dash-sub">RH ${fmt(humidity, 0)}% (DP ${fmt(dewC, 0)}°C)</div>
+                        </div>
+                    </div>
+                    <div class="weather-dash-tile">
+                        ${getWindCompassSvg(direction, speedVal, gustVal, unitLabel)}
+                        <div class="weather-dash-details" style="margin-left: 5px;">
+                            <div class="weather-dash-label">Wind</div>
+                            ${windHtml}
+                        </div>
+                    </div>
+                    <div class="weather-dash-tile">
+                        <div class="weather-dash-details">
+                            <div class="weather-dash-label">Altimeter / Visibility</div>
+                            <div class="weather-dash-val" style="font-size:1.45rem;">${presLabel}</div>
+                            <div class="weather-dash-sub">Visibility ${visLabel}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            if (isExpanded) {
+                metarContent.innerHTML = footerGridHtml;
+            } else {
+                const separator = ' | ';
+                const fieldsText = config.fields.map((field) => values[field]).filter(Boolean).join(separator);
+                
+                let iconMini = `<div class="weather-dash-icon-wrap" style="width:16px; height:18px; display:inline-block; vertical-align:middle; margin-right:4px;">${getWeatherIconSvg(values.description)}</div>`;
+                let compassMini = ``;
+                if (Number.isFinite(direction)) {
+                    compassMini = `<div style="width:16px; height:18px; display:inline-block; vertical-align:middle; margin-left:4px; margin-right:4px;">
+                        <svg viewBox="0 0 100 100" style="width:100%; height:100%;">
+                            <circle cx="50" cy="50" r="45" stroke="var(--brand-accent)" stroke-width="8" fill="none" opacity="0.4" />
+                            <g transform="rotate(${direction}, 50, 50)">
+                                <polygon points="50,15 40,45 50,38 60,45" fill="var(--brand-accent)" />
+                            </g>
+                        </svg>
+                    </div>`;
+                }
+
+                metarContent.innerHTML = `<div style="display:flex; align-items:center; flex-wrap:nowrap; gap:4px; height:100%;">
+                    ${iconMini}
+                    <span>KDFW ${separator} ${fieldsText}</span>
+                    ${compassMini}
+                </div>`;
+            }
+
+            const colossalClocksHtml = `
+                <div class="weather-dashboard-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr)) !important; height: 100%; width: 100%; gap: clamp(16px, 2.2vh, 32px) !important;">
+                    <div class="weather-dash-tile" style="flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(255,255,255,0.03); border: 1.5px solid rgba(255,255,255,0.06); border-radius: 24px; padding: clamp(24px, 4vh, 48px);">
+                        <div class="weather-dash-label" style="font-size: clamp(1.5rem, 3.5vh, 4rem) !important; font-weight: 800; letter-spacing: 0.08em; color: var(--text-2); text-transform: uppercase;">DFW Local Time</div>
+                        <div class="weather-dash-val" id="idle-clock-dfw" style="font-family: monospace; font-size: clamp(5rem, 13vh, 18rem) !important; color: #ffcb05 !important; text-shadow: 0 0 25px rgba(255, 203, 5, 0.35); font-weight: 900; line-height: 1.15; margin: auto 0;">--:--:--</div>
+                        <div class="weather-dash-sub" style="font-size: clamp(1.2rem, 2.5vh, 3rem) !important; color: var(--text-3); font-weight: 700;">Airport Reference Time</div>
+                    </div>
+                    <div class="weather-dash-tile" style="flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(255,255,255,0.03); border: 1.5px solid rgba(255,255,255,0.06); border-radius: 24px; padding: clamp(24px, 4vh, 48px);">
+                        <div class="weather-dash-label" style="font-size: clamp(1.5rem, 3.5vh, 4rem) !important; font-weight: 800; letter-spacing: 0.08em; color: var(--text-2); text-transform: uppercase;">Zulu Time (UTC)</div>
+                        <div class="weather-dash-val" id="idle-clock-utc" style="font-family: monospace; font-size: clamp(5rem, 13vh, 18rem) !important; color: #2f9bff !important; text-shadow: 0 0 25px rgba(47, 155, 255, 0.35); font-weight: 900; line-height: 1.15; margin: auto 0;">--:--:--</div>
+                        <div class="weather-dash-sub" style="font-size: clamp(1.2rem, 2.5vh, 3rem) !important; color: var(--text-3); font-weight: 700;">Aviation Standard Time</div>
+                    </div>
+                </div>
+            `;
+
+            const colossalRadarHtml = `
+                <div class="weather-dash-tile" style="width: 100%; height: 100%; min-height: 50vh; position: relative; overflow: hidden; border-radius: 24px; background: rgba(0,0,0,0.2); border: 1.5px solid rgba(255,255,255,0.08); box-sizing: border-box; display: flex; align-items: stretch; justify-content: stretch; padding: 0 !important; flex: 1;">
+                    <img src="https://radar.weather.gov/ridge/standard/KDFW_loop.gif" 
+                         style="width: 100%; height: 100%; object-fit: cover; filter: brightness(0.9) contrast(1.2);" 
+                         alt="KDFW NOAA Radar Loop" />
+                    <div style="position: absolute; top: clamp(16px, 3vh, 32px); left: clamp(16px, 3vh, 32px); background: rgba(8,14,22,0.85); border: 1.5px solid rgba(255,255,255,0.15); padding: 8px 16px; border-radius: 8px; font-weight: 900; color: #ffffff; font-size: clamp(1rem, 2vh, 1.8rem); box-shadow: 0 4px 16px rgba(0,0,0,0.5);">
+                        KDFW LIVE NOAA RADAR LOOP
+                    </div>
+                </div>
+            `;
+
+            const cockpit = document.getElementById('status-weather-cockpit');
+            if (cockpit) {
+                if (activeIdleViewIndex === 1) {
+                    cockpit.innerHTML = colossalClocksHtml;
+                } else if (activeIdleViewIndex === 2) {
+                    cockpit.innerHTML = colossalRadarHtml;
+                } else {
+                    cockpit.innerHTML = cockpitGridHtml;
+                }
+            }
+            footerTime.textContent = 'Updated: ' + time;
+        }
+
+        fetchWeather();
+        setInterval(fetchWeather, 60000);
+
+        function sanitizeSimpleHtml(html) {
+            const stripped = html
+                .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+                .replace(/on[a-z]+\s*=\s*"[^"]*"/gi, '')
+                .replace(/on[a-z]+\s*=\s*'[^']*'/gi, '');
+            return stripped;
+        }
+
+        function stopCarouselTimer() {
+            if (carouselTimer) {
+                clearTimeout(carouselTimer);
+                clearInterval(carouselTimer);
+                carouselTimer = null;
+            }
+        }
+
+        function ensureContentDefaults() {
+            if (!alertState.content) {
+                alertState.content = { active: false, kind: null, payload: null, title: '', carouselActive: false, intervalSec: 8, items: [] };
+            }
+            if (!Array.isArray(alertState.content.items)) {
+                alertState.content.items = [];
+            }
+            if (typeof alertState.content.intervalSec !== 'number') {
+                alertState.content.intervalSec = 8;
+            }
+            if (typeof alertState.content.carouselActive !== 'boolean') {
+                alertState.content.carouselActive = false;
+            }
+            if (!alertState.content.presentation || typeof alertState.content.presentation !== 'object') {
+                alertState.content.presentation = cloneJson(displaySettings.media);
+            }
+            alertState.content.items = alertState.content.items.map((item) => ({ ...item, presentation: item.presentation && typeof item.presentation === 'object' ? item.presentation : cloneJson(displaySettings.media) }));
+        }
+
+        function normalizeMediaPresentation(item) {
+            const input = item?.presentation && typeof item.presentation === 'object' ? item.presentation : displaySettings.media;
+            return {
+                fit: ['contain', 'cover', 'stretch', 'letterbox', 'blur'].includes(input.fit) ? input.fit : displaySettings.media.fit,
+                background: normalizeColor(input.background, displaySettings.media.background),
+                focalX: Math.round(clampNumber(input.focalX, 0, 100, displaySettings.media.focalX)),
+                focalY: Math.round(clampNumber(input.focalY, 0, 100, displaySettings.media.focalY))
+            };
+        }
+
+        function createMediaStage(item, foreground) {
+            const presentation = normalizeMediaPresentation(item);
+            const stage = document.createElement('div');
+            stage.className = 'media-stage';
+            stage.style.setProperty('--media-background', presentation.background);
+            stage.style.setProperty('--media-focal-x', presentation.focalX + '%');
+            stage.style.setProperty('--media-focal-y', presentation.focalY + '%');
+            const fit = presentation.fit === 'stretch' ? 'fill' : presentation.fit === 'cover' ? 'cover' : 'contain';
+            stage.style.setProperty('--media-object-fit', fit);
+            if (presentation.fit === 'blur') {
+                const backing = foreground.cloneNode(true);
+                backing.className = 'media-blur-background';
+                backing.removeAttribute('controls');
+                backing.setAttribute('aria-hidden', 'true');
+                backing.tabIndex = -1;
+                if (backing.tagName === 'VIDEO') {
+                    backing.muted = true;
+                    backing.autoplay = true;
+                    backing.loop = true;
+                    backing.playsInline = true;
+                }
+                stage.appendChild(backing);
+            }
+            foreground.classList.add('media-foreground');
+            stage.appendChild(foreground);
+            return stage;
+        }
+
+        function createSingleContentStage(item) {
+            if (item.kind === 'text') {
+                const div = document.createElement('div');
+                div.className = 'rich-text';
+                div.textContent = String(item.payload);
+                return createMediaStage(item, div);
+            }
+
+            if (item.kind === 'image') {
+                const img = document.createElement('img');
+                img.className = 'rich-image';
+                img.loading = 'lazy';
+                img.src = String(item.payload);
+                img.alt = item.title || 'Shared image content';
+                return createMediaStage(item, img);
+            }
+
+            if (item.kind === 'video') {
+                const video = document.createElement('video');
+                video.className = 'rich-frame';
+                video.controls = true;
+                video.autoplay = true;
+                video.muted = true;
+                video.loop = true;
+                video.playsInline = true;
+                video.src = String(item.payload);
+                return createMediaStage(item, video);
+            }
+
+            if (item.kind === 'embed') {
+                const frame = document.createElement('iframe');
+                frame.className = 'rich-frame';
+                let embedUrl = String(item.payload).trim();
+                if (embedUrl.includes('<iframe') || embedUrl.startsWith('<iframe')) {
+                    const srcMatch = embedUrl.match(/src=["']([^"']+)["']/i);
+                    if (srcMatch) {
+                        embedUrl = srcMatch[1];
+                    }
+                }
+                frame.src = embedUrl;
+                frame.setAttribute('loading', 'lazy');
+                frame.setAttribute('referrerpolicy', 'no-referrer');
+                frame.title = item.title || 'Embedded content';
+                return createMediaStage(item, frame);
+            }
+
+            if (item.kind === 'html') {
+                const frame = document.createElement('iframe');
+                frame.className = 'rich-frame';
+                frame.style.width = '100%';
+                frame.style.height = '100%';
+                frame.style.background = 'transparent';
+                frame.setAttribute('sandbox', 'allow-scripts');
+                frame.srcdoc = String(item.payload);
+                return createMediaStage(item, frame);
+            }
+
+            const fallback = document.createElement('div');
+            fallback.className = 'rich-text';
+            fallback.textContent = String(item.payload);
+            return createMediaStage(item, fallback);
+        }
+
+        function renderSingleContentItem(item) {
+            richBody.innerHTML = '';
+            const stage = createSingleContentStage(item);
+            stage.style.position = 'absolute';
+            stage.style.inset = '0';
+            richBody.appendChild(stage);
+        }
+
+        function transitionToSlide(nextIndex) {
+            const content = alertState.content;
+            if (!content || !content.carouselActive || !Array.isArray(content.items) || content.items.length === 0) {
+                return;
+            }
+
+            const oldStage = richBody.querySelector('.media-stage');
+            if (!oldStage) {
+                carouselIndex = nextIndex;
+                renderSingleContentItem(content.items[carouselIndex]);
+                scheduleNextSlide();
+                return;
+            }
+
+            carouselIndex = nextIndex;
+            const nextItem = content.items[carouselIndex];
+            const newStage = createSingleContentStage(nextItem);
+            
+            newStage.style.position = 'absolute';
+            newStage.style.inset = '0';
+            newStage.style.opacity = '0';
+            newStage.style.zIndex = '2';
+            newStage.style.transition = 'opacity 0.6s ease-in-out';
+            
+            oldStage.style.position = 'absolute';
+            oldStage.style.inset = '0';
+            oldStage.style.zIndex = '1';
+            oldStage.style.transition = 'opacity 0.6s ease-in-out';
+
+            richBody.appendChild(newStage);
+
+            // Reflow to register transition initial state
+            newStage.offsetHeight;
+
+            newStage.style.opacity = '1';
+            oldStage.style.opacity = '0';
+
+            setTimeout(() => {
+                if (oldStage.parentNode === richBody) {
+                    richBody.removeChild(oldStage);
+                }
+            }, 600);
+
+            scheduleNextSlide();
+        }
+
+        function scheduleNextSlide() {
+            stopCarouselTimer();
+            const content = alertState.content;
+            if (!content || !content.carouselActive || !Array.isArray(content.items) || content.items.length === 0) {
+                return;
+            }
+
+            const activeItem = content.items[carouselIndex];
+            const durationSec = Math.max(2, Math.min(300, Number(activeItem.durationSec) || Number(content.intervalSec) || 8));
+
+            carouselTimer = setTimeout(() => {
+                if (!alertState.content || !alertState.content.carouselActive || !Array.isArray(alertState.content.items) || alertState.content.items.length === 0) {
+                    stopCarouselTimer();
+                    return;
+                }
+                const nextIndex = (carouselIndex + 1) % alertState.content.items.length;
+                transitionToSlide(nextIndex);
+            }, durationSec * 1000);
+        }
+
+        function renderRichContent() {
+            ensureContentDefaults();
+            const content = alertState.content;
+
+            if (displaySettings.layout.mediaSlot === 'hidden') {
+                stopCarouselTimer();
+                richZone.classList.add('hidden');
+                richBody.innerHTML = '';
+                return;
+            }
+
+            if (content.carouselActive && content.items.length > 0) {
+                const key = content.items.map((item) => (item.id || '') + '_' + (item.durationSec || '')).join('|') + '|' + content.carouselActive;
+
+                if (carouselIndex >= content.items.length) {
+                    carouselIndex = 0;
+                }
+
+                richZone.classList.remove('hidden');
+                richTitle.textContent = content.title || ('Carousel Playlist (' + content.items.length + ' items)');
+
+                if (carouselItemsKey !== key) {
+                    stopCarouselTimer();
+                    carouselItemsKey = key;
+                    carouselIndex = 0;
+                    renderSingleContentItem(content.items[carouselIndex]);
+                    scheduleNextSlide();
+                }
+                return;
+            }
+
+            stopCarouselTimer();
+            carouselIndex = 0;
+            carouselItemsKey = '';
+
+            if (!content.active || !content.kind || !content.payload) {
+                richZone.classList.add('hidden');
+                richBody.innerHTML = '';
+                return;
+            }
+
+            richZone.classList.remove('hidden');
+            richTitle.textContent = content.title || ('Content Package - ' + content.kind.toUpperCase());
+            renderSingleContentItem(content);
+        }
+
+        function getActiveSignageItems() {
+            const items = [];
+
+            if (alertState.lightning.active && alertState.lightning.level === 'red') {
+                const appearance = displaySettings.alerts.red;
+                items.push({
+                    kind: 'red',
+                    eyebrow: 'Critical Weather Alert',
+                    title: appearance.label,
+                    icon: appearance.icon,
+                    body: 'Lightning 3 Miles\nRamp Closed',
+                    appearance
+                });
+            } else if (alertState.lightning.active && alertState.lightning.level === 'yellow') {
+                const appearance = displaySettings.alerts.yellow;
+                items.push({
+                    kind: 'yellow',
+                    eyebrow: 'Weather Alert',
+                    title: appearance.label,
+                    icon: appearance.icon,
+                    body: 'Lightning 10 Miles',
+                    appearance
+                });
+            }
+
+            if (alertState.high_winds.active) {
+                const appearance = displaySettings.alerts.wind;
+                const knots = alertState.high_winds.knots || 0;
+                let bodyVal = String(knots) + ' KTS';
+                if (knots >= 25 && knots <= 30) {
+                    bodyVal += '\n[pca:airbus-warn]';
+                } else if (knots >= 31) {
+                    bodyVal += '\n[pca:all-danger]';
+                }
+                items.push({
+                    kind: 'wind',
+                    eyebrow: 'Weather Alert',
+                    title: appearance.label,
+                    icon: appearance.icon,
+                    body: bodyVal,
+                    appearance
+                });
+            }
+
+            alertState.memos.slice(-MAX_ACTIVE_MESSAGES).forEach((message) => {
+                const category = ['memo', 'announcement', 'update'].includes(message.category)
+                    ? message.category
+                    : 'memo';
+                const styleKey = message.templateId ? 'custom' : category;
+                const appearance = displaySettings.alerts[styleKey];
+                const categoryLabel = appearance.label;
+                items.push({
+                    kind: styleKey,
+                    eyebrow: categoryLabel,
+                    title: message.title || categoryLabel,
+                    icon: appearance.icon,
+                    body: message.text || '',
+                    timestamp: message.timestamp,
+                    appearance
+                });
+            });
+
+            return items;
+        }
+
+        function renderActiveSignageCards(items) {
+            alertDisplay.innerHTML = '';
+            if (!items.length) {
+                alertDisplay.style.display = 'none';
+                alertDisplay.style.removeProperty('--card-columns');
+                alertDisplay.style.removeProperty('--card-rows');
+                delete alertDisplay.dataset.density;
+                return;
+            }
+
+            const viewportWidth = document.documentElement.clientWidth;
+            let columns = 1;
+            if (displaySettings.layout.preset === 'portrait') {
+                columns = 1;
+            } else if (viewportWidth >= 1100) {
+                columns = items.length <= 3 ? items.length : items.length <= 4 ? 2 : items.length <= 6 ? 3 : 4;
+            } else if (viewportWidth >= 680) {
+                columns = items.length === 1 ? 1 : items.length <= 4 ? 2 : 3;
+            }
+            const rows = Math.ceil(items.length / columns);
+
+            alertDisplay.style.display = 'grid';
+            alertDisplay.style.setProperty('--card-columns', String(columns));
+            alertDisplay.style.setProperty('--card-rows', String(rows));
+            alertDisplay.dataset.density = items.length >= 9 ? 'dense' : items.length >= 5 ? 'compact' : 'comfortable';
+            items.forEach((item) => {
+                const card = document.createElement('article');
+                const isMessage = ['memo', 'announcement', 'update', 'custom'].includes(item.kind);
+                card.className = 'signage-card ' + item.kind + (isMessage ? ' signage-card-message' : '');
+                const appearance = item.appearance || displaySettings.alerts[item.kind] || displaySettings.alerts.custom;
+                card.style.background = 'linear-gradient(145deg,' + appearance.bg + ',' + appearance.bg2 + ')';
+                card.style.color = appearance.text;
+                card.style.borderColor = appearance.border;
+                card.style.borderWidth = appearance.borderWidth + 'px';
+                card.style.setProperty('--alert-scale', String(appearance.textScale));
+                if (appearance.pulse && !document.body.classList.contains('reduced-motion')) card.classList.add('is-pulsing');
+
+                const eyebrow = document.createElement('div');
+                eyebrow.className = 'signage-card-eyebrow';
+                eyebrow.textContent = (item.icon ? item.icon + ' · ' : '') + item.eyebrow;
+
+                const title = document.createElement('div');
+                title.className = 'signage-card-title';
+                title.textContent = item.title;
+
+                const body = document.createElement('div');
+                body.className = 'signage-card-body';
+                const bodyText = item.body || '';
+                body.innerHTML = parseRichCardBody(bodyText, item.timestamp);
+                if (String(bodyText).length > 120 && !String(bodyText).startsWith('FIDS BOARD:')) {
+                    body.classList.add('long-copy');
+                }
+
+                const time = document.createElement('div');
+                time.className = 'signage-card-time';
+                time.textContent = item.timestamp
+                    ? 'Posted ' + new Date(item.timestamp).toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit' }) + ' DFW'
+                    : 'Active now';
+
+                card.appendChild(eyebrow);
+                card.appendChild(title);
+                card.appendChild(body);
+                card.appendChild(time);
+                alertDisplay.appendChild(card);
+            });
+        }
+
+        function renderSignage() {
+            const signageItems = getActiveSignageItems();
+            const contentActive = Boolean(alertState.content && (alertState.content.active || alertState.content.carouselActive));
+            const hasActiveItems = signageItems.length > 0 || contentActive;
+            const isConnected = isDisplayConnected();
+
+            document.body.classList.toggle('has-signage-cards', signageItems.length > 0);
+            document.body.classList.toggle('content-only', contentActive && signageItems.length === 0);
+
+            if (!hasActiveItems) {
+                statusCard.style.display = 'grid';
+                renderActiveSignageCards([]);
+                
+                const idleZone = document.getElementById('idle-clock-zone-elem');
+                if (idleZone) {
+                    idleZone.style.display = 'none';
+                }
+
+                secondaryAlerts.innerHTML = '';
+                memoZone.classList.add('hidden');
+                renderRichContent();
+                document.body.style.backgroundColor = 'var(--idle-bg)';
+                document.body.style.color = 'var(--idle-text)';
+                footerStatus.textContent = isConnected ? 'Status: Ready' : 'Status: Waiting for control connection';
+                updateStatusCapsule();
+                
+                // Render the active idle weather view and start rotation timer
+                renderWeather();
+                startIdleRotationTimer();
+                return;
+            }
+            
+            // Stop rotation timer when active alerts are displayed
+            stopIdleRotationTimer();
+            
+            const idleZone = document.getElementById('idle-clock-zone-elem');
+            if (idleZone) idleZone.style.display = 'none';
+
+            statusCard.style.display = 'none';
+            renderActiveSignageCards(signageItems);
+            memoZone.classList.add('hidden');
+            footerStatus.textContent = 'Status: ' + signageItems.length + ' active notice' + (signageItems.length === 1 ? '' : 's');
+            document.body.style.backgroundColor = 'var(--idle-bg)';
+            document.body.style.color = 'var(--idle-text)';
+            renderRichContent();
+
+            // Update marquee ticker
+            const marqueeBar = document.getElementById('marquee-bar');
+            if (marqueeBar) {
+                const tickerVisible = displaySettings.layout.tickerVisible;
+                marqueeBar.classList.toggle('hidden', !tickerVisible);
+                if (tickerVisible) {
+                    let tickerItems = [];
+                    if (alertState.memos && alertState.memos.length > 0) {
+                        tickerItems = alertState.memos.map(m => {
+                            const cat = m.category ? m.category.toUpperCase() : 'MEMO';
+                            const titlePart = m.title ? `[${m.title}] ` : '';
+                            return `${cat}: ${titlePart}${m.text}`;
+                        });
+                    } else {
+                        tickerItems = ['DFW OPERATIONS CONSOLE ONLINE', 'WEATHER STATUS ACTIVE', 'SYSTEM READY'];
+                    }
+                    const fullTickerText = '   •   ' + tickerItems.join('   •   ') + '   •   ';
+                    const textEl = document.getElementById('marquee-text');
+                    if (textEl && textEl.textContent !== fullTickerText) {
+                        textEl.textContent = fullTickerText;
+                        setTimeout(() => {
+                            const parentWidth = textEl.parentElement.offsetWidth || window.innerWidth;
+                            const textWidth = textEl.offsetWidth || (fullTickerText.length * 7);
+                            const speed = 50; // pixels per second
+                            const duration = (textWidth + parentWidth) / speed;
+                            textEl.style.animationDuration = duration + 's';
+                        }, 50);
+                    }
+                }
+            }
+        }
+
+        function renderMemoQueue() {
+            memoQueue.innerHTML = '';
+            if (alertState.memos.length === 0) {
+                memoZone.classList.add('hidden');
+                return;
+            }
+            memoZone.classList.remove('hidden');
+            alertState.memos.forEach((memo) => {
+                const item = document.createElement('div');
+                item.className = 'memo-item';
+                item.textContent = memo.text;
+                memoQueue.appendChild(item);
+            });
+        }
+
+        function updateStatusCapsule() {
+            const cap = document.getElementById('status-capsule');
+            const lbl = document.getElementById('status-capsule-label');
+            const pinDisp = document.getElementById('pin-display');
+            if (!cap || !lbl || !pinDisp) return;
+
+            if (isDisplayConnected()) {
+                cap.className = 'status-capsule connected-mode';
+                lbl.textContent = 'CONNECTED';
+                lbl.style.color = '#22c55e';
+                pinDisp.textContent = 'SYSTEM READY';
+                pinDisp.style.fontFamily = 'inherit';
+                pinDisp.style.fontSize = 'clamp(1.1rem, 2.2vw, 1.5rem)';
+            } else {
+                cap.className = 'status-capsule pin-mode';
+                lbl.textContent = 'Connection PIN';
+                lbl.style.color = '#2f9bff';
+                pinDisp.textContent = pin;
+                pinDisp.style.fontFamily = '"Courier New", monospace';
+                pinDisp.style.fontSize = '';
+            }
+        }
+
+        function updateConnectionBadge(connected) {
+            if (connected) {
+                connBadge.textContent = 'Connected';
+                connBadge.classList.add('connected');
+            } else {
+                connBadge.textContent = 'Offline';
+                connBadge.classList.remove('connected');
+            }
+            updateStatusCapsule();
+        }
+
+        function parseIncomingMessage(data) {
+            try {
+                const msg = typeof data === 'string' ? JSON.parse(data) : data;
+
+                if (msg && msg.type === 'heartbeat_ping') {
+                    heartbeatRxTs = Date.now();
+                    if (conn && conn.open) {
+                        conn.send(JSON.stringify({ type: 'heartbeat_pong', ts: msg.ts || Date.now(), appVersion: APP_VERSION }));
+                    }
+                    return;
+                }
+
+                if (msg && msg.type === 'control_disconnecting') {
+                    peerControlConnected = false;
+                    heartbeatRxTs = 0;
+                    if (conn) {
+                        try { conn.close(); } catch(_) {}
+                        conn = null;
+                    }
+                    clearDisplayStateAfterDisconnect();
+                    return;
+                }
+
+                if (typeof msg.seq === 'number') {
+                    const senderKey = msg.senderSession || msg.sender || 'legacy';
+                    if (senderKey !== lastInboundSender) {
+                        lastInboundSender = senderKey;
+                        lastInboundSeq = 0;
+                    }
+                    if (msg.seq <= lastInboundSeq) {
+                        return;
+                    }
+                    lastInboundSeq = msg.seq;
+                }
+
+                if (msg.version === 1 && msg.alerts) {
+                    if (msg.displaySettings && typeof msg.displaySettings === 'object') {
+                        try {
+                            applyDisplaySettings(msg.displaySettings, true);
+                        } catch (_) {
+                            setDiagnostics({ lastError: 'invalid-display-settings' });
+                        }
+                    }
+                    alertState.high_winds = msg.alerts.high_winds || { active: false, knots: 0 };
+                    alertState.lightning = msg.alerts.lightning || { active: false, level: null };
+                    alertState.memos = msg.alerts.memos || [];
+                    alertState.content = msg.alerts.content || { active: false, kind: null, payload: null, title: '', carouselActive: false, intervalSec: 8, items: [] };
+                    footerStatus.textContent = 'Status: Alert sync (' + (msg.appVersion || 'legacy') + ')';
+                    renderSignage();
+                    return;
+                }
+                if (msg.type === 'high_winds') {
+                    alertState.high_winds.active = true;
+                    alertState.high_winds.knots = msg.knots ?? 0;
+                } else if (msg.type === 'yellow_alert') {
+                    alertState.lightning.active = true;
+                    alertState.lightning.level = 'yellow';
+                } else if (msg.type === 'red_alert') {
+                    alertState.lightning.active = true;
+                    alertState.lightning.level = 'red';
+                } else if (msg.type === 'info_memo') {
+                    alertState.memos.push({ id: 'memo_' + Date.now(), text: msg.text, timestamp: Date.now() });
+                }
+                renderSignage();
+            } catch (e) {
+                console.error('Invalid message:', data);
+            }
+        }
+
+        function bindShowPeerHandlers(instance, label, isPrimary, generation) {
+            instance.on('open', () => {
+                if (generation !== peerGeneration) {
+                    return;
+                }
+                const modernId = makeModernPeerId(pin);
+                const legacyId = makeLegacyPeerId(pin);
+                pinDisplay.textContent = pin;
+                connectionText.textContent = 'Ready on PIN ' + pin + ' (' + modernId + ' / ' + legacyId + ') v' + APP_VERSION + '.';
+                setDiagnostics({ peerId: label === 'modern' ? modernId : legacyId, attempt: generation });
+            });
+
+            instance.on('connection', (conn_) => {
+                if (generation !== peerGeneration) {
+                    try {
+                        conn_.close();
+                    } catch (_) {
+                        // Ignore close errors on stale generation.
+                    }
+                    return;
+                }
+                conn = conn_;
+                conn.on('open', () => {
+                    if (generation !== peerGeneration) {
+                        return;
+                    }
+                    peerControlConnected = true;
+                    updateConnectionBadge(true);
+                    heartbeatRxTs = 0;
+                    connectionText.textContent = 'Control link active via ' + label + '.';
+                    setDiagnostics({ peerId: conn.peer || (label + '-listener'), lastError: '' });
+                });
+                conn.on('data', (data) => {
+                    if (generation !== peerGeneration) {
+                        return;
+                    }
+                    parseIncomingMessage(data);
+                });
+                conn.on('close', () => {
+                    if (generation !== peerGeneration) {
+                        return;
+                    }
+                    peerControlConnected = false;
+                    clearDisplayStateAfterDisconnect();
+                });
+                conn.on('error', () => {
+                    if (generation !== peerGeneration) {
+                        return;
+                    }
+                    peerControlConnected = false;
+                    if (!isDisplayConnected()) {
+                        updateConnectionBadge(false);
+                    }
+                    setDiagnostics({ lastError: 'connection-error' });
+                });
+            });
+
+            instance.on('error', (err) => {
+                if (generation !== peerGeneration) {
+                    return;
+                }
+                updateConnectionBadge(false);
+
+                if (!isPrimary && err && err.type === 'unavailable-id') {
+                    return;
+                }
+
+                setDiagnostics({ lastError: err?.type || 'peer-error' });
+
+                if (err && err.type === 'unavailable-id' && isPrimary) {
+                    pin = generatePin();
+                    pinDisplay.textContent = pin;
+                    connectionText.textContent = 'PIN conflict detected. New PIN generated.';
+                    setTimeout(() => {
+                        setupPeer();
+                        startMqttShowRelay();
+                    }, 350);
+                    return;
+                }
+
+                if (isPrimary && err && (err.type === 'network' || err.type === 'socket-error' || err.type === 'server-error')) {
+                    connectionText.textContent = 'Signaling interrupted. Reconnecting...';
+                    setTimeout(() => {
+                        setupPeer();
+                    }, 1200);
+                    return;
+                }
+
+                connectionText.textContent = 'Signaling issue (' + label + '): ' + (err?.type || 'unknown') + '. Keep page open.';
+            });
+
+            instance.on('disconnected', () => {
+                if (generation !== peerGeneration) {
+                    return;
+                }
+                if (!isPrimary) {
+                    return;
+                }
+                updateConnectionBadge(false);
+                connectionText.textContent = 'Signaling disconnected. Reconnecting...';
+                setDiagnostics({ lastError: 'signaling-disconnected' });
+                try {
+                    instance.reconnect();
+                } catch (_) {
+                    setTimeout(() => {
+                        setupPeer();
+                    }, 1200);
+                }
+            });
+
+            instance.on('close', () => {
+                if (generation !== peerGeneration) {
+                    return;
+                }
+                if (!isPrimary) {
+                    return;
+                }
+                updateConnectionBadge(false);
+                connectionText.textContent = 'Peer closed. Restarting session...';
+                setDiagnostics({ lastError: 'peer-closed' });
+                setTimeout(() => {
+                    setupPeer();
+                }, 1200);
+            });
+        }
+
+        function setupPeer() {
+            peerGeneration += 1;
+            const generation = peerGeneration;
+            pinDisplay.textContent = pin;
+            connectionText.textContent = 'Bring control page online and enter this PIN.';
+            updateStatusCapsule();
+
+            if (peer) {
+                try {
+                    peer.destroy();
+                } catch (_) {
+                    // Ignore cleanup errors when rotating IDs.
+                }
+            }
+
+            if (legacyPeer) {
+                try {
+                    legacyPeer.destroy();
+                } catch (_) {
+                    // Ignore cleanup errors when rotating IDs.
+                }
+            }
+
+            const modernId = makeModernPeerId(pin);
+            const legacyId = makeLegacyPeerId(pin);
+            peer = new Peer(modernId, PEER_CONFIG);
+            legacyPeer = new Peer(legacyId, PEER_CONFIG);
+
+            bindShowPeerHandlers(peer, 'modern', true, generation);
+            bindShowPeerHandlers(legacyPeer, 'legacy', false, generation);
+        }
+
+        setupPeer();
+        // startMqttShowRelay();
+        buildStamp.textContent = 'Build ' + APP_VERSION;
+        setDiagnostics({ heartbeat: 'Idle', peerId: '', attempt: 0, lastError: '' });
+        startHeartbeatUiTicker();
+        applyDisplaySettings(displaySettings, false);
+
+        setInterval(() => {
+            const now = new Date();
+            const utcTime = now.toLocaleTimeString('en-US', { timeZone: 'UTC', hour12: false });
+            const dfwTime = now.toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour12: false });
+            const dfw = document.getElementById('idle-clock-dfw');
+            const utc = document.getElementById('idle-clock-utc');
+            if (dfw) dfw.textContent = dfwTime;
+            if (utc) utc.textContent = utcTime;
+        }, 1000);
+
+        let resizeRenderTimer = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeRenderTimer);
+            resizeRenderTimer = setTimeout(renderSignage, 100);
+        });
+
+        function updateAllCountdownTimers() {
+            const elements = document.querySelectorAll('.card-countdown-timer');
+            elements.forEach((el) => {
+                const target = Number(el.dataset.target || 0);
+                if (!target) return;
+                const remainingMs = target - Date.now();
+                if (remainingMs > 0) {
+                    const totalSec = Math.floor(remainingMs / 1000);
+                    const hours = Math.floor(totalSec / 3600);
+                    const minutes = Math.floor((totalSec % 3600) / 60);
+                    const seconds = totalSec % 60;
+                    
+                    let timeStr = '';
+                    const pad = (n) => String(n).padStart(2, '0');
+                    if (hours > 0) {
+                        timeStr = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+                    } else {
+                        timeStr = `${pad(minutes)}:${pad(seconds)}`;
+                    }
+                    el.textContent = timeStr;
+                    el.classList.remove('expired');
+                } else {
+                    el.textContent = '00:00';
+                    el.classList.add('expired');
+                }
+            });
+        }
+        setInterval(updateAllCountdownTimers, 1000);
+
+        // Auto-refresh the show page after 4 hours to prevent stale states or memory accumulation
+        setTimeout(() => {
+            console.log('Performing scheduled 4-hour screen refresh...');
+            location.reload();
+        }, 4 * 60 * 60 * 1000);
+
+        renderSignage();
+    </script>
+</body>
+</html>
